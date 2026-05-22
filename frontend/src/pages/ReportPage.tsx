@@ -182,7 +182,7 @@ export default function ReportPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">批次报告</h2>
+          <h1 className="text-xl font-bold text-gray-900">批次报告</h1>
           <div className="text-sm text-gray-500 font-mono mt-1">{batchId}</div>
         </div>
         <div className="flex gap-2">

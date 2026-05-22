@@ -191,7 +191,7 @@ export default function RunPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-900">新建抽取任务</h2>
+        <h1 className="text-xl font-bold text-gray-900">新建抽取任务</h1>
         <div className="flex gap-2">
           <button
             type="button"

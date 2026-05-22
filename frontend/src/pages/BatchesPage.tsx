@@ -99,7 +99,7 @@ export default function BatchesPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-900">历史任务</h2>
+        <h1 className="text-xl font-bold text-gray-900">历史任务</h1>
         <button type="button" onClick={loadBatches} className="btn-secondary text-sm">
           刷新
         </button>

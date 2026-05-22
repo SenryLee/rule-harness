@@ -110,7 +110,9 @@ function CollapsibleSection({
           />
         </svg>
       </button>
-      {open && <div className="px-5 pb-4">{children}</div>}
+      <div className={`overflow-hidden transition-all duration-200 ease-out ${open ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+        <div className="px-5 pb-4">{children}</div>
+      </div>
     </div>
   )
 }
@@ -200,7 +202,12 @@ export default function ConfigPage() {
     setLoading(true)
     fetchConfig()
       .then((cfg) => {
-        if (!cancelled) setConfig(cfg)
+        if (!cancelled) {
+          if (cfg.models.fallback && !cfg.models.fallback.provider) {
+            cfg = { ...cfg, models: { ...cfg.models, fallback: null } }
+          }
+          setConfig(cfg)
+        }
       })
       .catch((err) => {
         if (!cancelled) setMessage({ type: 'error', text: err.message })
@@ -372,7 +379,7 @@ export default function ConfigPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-900">系统配置</h2>
+        <h1 className="text-xl font-bold text-gray-900">系统配置</h1>
         <div className="flex items-center gap-3">
           {message && (
             <span
