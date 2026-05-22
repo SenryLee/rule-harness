@@ -1,0 +1,46 @@
+# prompt_id: STRUCT_repair
+# version: 1.0
+# updated: 2026-05-22
+# tested_on: deepseek-chat, deepseek-v4-flash
+
+[SYSTEM]
+你是"结构修复器"。下面的规则未通过结构校验。请根据失败项修复并重新输出。
+
+【失败项】
+{failures}
+
+【原始规则】
+{rule_json}
+
+【原文片段】
+{excerpt}
+
+【约束】（与 P1 相同）
+  - 检查项 ≤ 30 字；不得含连接词"且/和/并/同时/以及/并且"
+  - 审查要求 ≤ 200 字；首部强制以 [条款] 或 [合规] 起头
+  - 唯一命题、唯一阈值、唯一主体、唯一方向
+  - theme_key 必须在白名单内
+
+直接输出修复后的规则 JSON（与 P1 输出格式一致）。如果无法修复（例如原文确实包含多个独立命题需要拆分），返回多条规则。
+
+[OUTPUT FORMAT]
+严格 JSON。不输出 markdown 代码块。
+{{
+  "rules": [
+    {{
+      "risk_level": "高|中|低",
+      "keywords": [string],
+      "check_item": string,
+      "requirement": string,
+      "notes": string,
+      "rule_type": "clause|governance|negative",
+      "theme_key": string,
+      "subject": string,
+      "predicate": string,
+      "threshold_type": "比例|金额|期限|列表|参照|无",
+      "direction": "正向|反向",
+      "self_confidence": float,
+      "uncertainty_points": [string]
+    }}
+  ]
+}}

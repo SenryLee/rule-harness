@@ -1,0 +1,82 @@
+models:
+  primary:
+    provider: deepseek
+    api_key: REMOVED_API_KEY
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-v4-flash
+    rpm_limit: 60
+    tpm_limit: 200000
+  fallback:
+    provider: null
+    api_key: ""
+    base_url: ""
+    model: ""
+    rpm_limit: 500
+    tpm_limit: 1000000
+
+extraction:
+  granularity: fine
+  regulation_depth: full
+  consistency_sampling: false
+  industry_preset: null
+  industry_vocabulary: ""
+  industry_focus_points: ""
+  redline_keywords:
+    - 红线
+    - 不得
+    - 禁止
+    - 必须
+    - 重大
+    - 不可转让
+    - 无效
+    - 无限责任
+    - 最高限额
+    - 赔偿上限
+    - 违约金
+    - 损害赔偿
+    - 间接损失
+    - 仲裁
+    - 管辖
+    - 法律适用
+    - 独占许可
+    - 排他许可
+    - 永久许可
+    - 全球范围
+    - 反贿赂
+    - 反洗钱
+    - 数据出境
+    - 个人信息
+    - 制裁
+
+priorities:
+  weights:
+    法规: 1
+    公司红线: 2
+    内部制度: 3
+    标准条款库: 4
+    历史合同: 5
+
+confidence:
+  threshold_review: 0.7
+  weights:
+    self: 0.30
+    consistency: 0.40
+    struct: 0.20
+    conflict: 0.10
+
+concurrency:
+  files: 4
+  blocks: 8
+
+ocr:
+  enabled: false
+  engine: paddleocr
+  language: ch+en
+
+budget:
+  max_tokens_per_batch: 5000000
+  pause_on_overrun: true
+
+storage:
+  db_path: ./data/harness.sqlite
+  exports_dir: ./data/exports
