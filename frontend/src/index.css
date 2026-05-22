@@ -1,69 +1,102 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2D3A4A transparent;
+  }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
-      sans-serif;
+    @apply font-body bg-codex-bg text-codex-text-primary antialiased;
+  }
+
+  ::selection {
+    @apply bg-accent-soft text-accent;
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+    @apply bg-accent text-codex-bg px-4 py-2 rounded-btn font-semibold
+           hover:bg-accent-hover hover:shadow-glow
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none
+           transition-all duration-150;
   }
 
   .btn-secondary {
-    @apply bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+    @apply border border-codex-border text-codex-text-secondary px-4 py-2 rounded-btn font-medium
+           hover:bg-codex-bg-tertiary hover:text-codex-text-primary hover:border-codex-text-muted
+           disabled:opacity-40 disabled:cursor-not-allowed
+           transition-all duration-150;
   }
 
   .btn-danger {
-    @apply bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+    @apply bg-red-500/15 text-red-400 border border-red-500/25 px-4 py-2 rounded-btn font-medium
+           hover:bg-red-500/25 hover:text-red-300
+           disabled:opacity-40 disabled:cursor-not-allowed
+           transition-all duration-150;
+  }
+
+  .btn-ghost {
+    @apply text-codex-text-secondary px-3 py-2 rounded-btn font-medium
+           hover:bg-codex-bg-tertiary hover:text-codex-text-primary
+           transition-all duration-150;
   }
 
   .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold;
   }
 
-  .badge-red {
-    @apply badge bg-red-100 text-red-800;
+  .badge-danger {
+    @apply badge bg-red-500/15 text-red-400;
   }
 
-  .badge-yellow {
-    @apply badge bg-yellow-100 text-yellow-800;
+  .badge-warning {
+    @apply badge bg-amber-500/15 text-amber-400;
   }
 
-  .badge-green {
-    @apply badge bg-green-100 text-green-800;
+  .badge-success {
+    @apply badge bg-emerald-500/15 text-emerald-400;
   }
 
-  .badge-blue {
-    @apply badge bg-blue-100 text-blue-800;
+  .badge-info {
+    @apply badge bg-blue-500/15 text-blue-400;
   }
 
-  .badge-purple {
-    @apply badge bg-purple-100 text-purple-800;
-  }
-
-  .badge-teal {
-    @apply badge bg-teal-100 text-teal-800;
-  }
-
-  .badge-gray {
-    @apply badge bg-gray-100 text-gray-800;
+  .badge-accent {
+    @apply badge bg-accent-soft text-accent;
   }
 
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-200;
+    @apply bg-codex-bg-secondary border border-codex-border rounded-card
+           hover:border-codex-text-muted/40 transition-colors duration-200;
   }
 
   .input-field {
-    @apply mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500;
+    @apply mt-1 block w-full rounded-input border border-codex-border bg-codex-bg-tertiary
+           px-3 py-2 text-sm text-codex-text-primary placeholder:text-codex-text-muted
+           focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-150;
   }
 
   .select-field {
-    @apply mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500 bg-white;
+    @apply input-field appearance-none cursor-pointer;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-btn text-sm font-medium
+           text-codex-text-secondary hover:bg-codex-bg-tertiary hover:text-codex-text-primary
+           transition-all duration-150;
+  }
+
+  .sidebar-link-active {
+    @apply sidebar-link bg-accent-soft text-accent border-l-[3px] border-accent
+           rounded-l-none pl-[13px];
   }
 }

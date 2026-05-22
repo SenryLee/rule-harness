@@ -76,6 +76,12 @@ const DEFAULT_CONFIG: Config = {
   },
 }
 
+const checkboxClasses =
+  'rounded border-codex-border bg-codex-bg text-accent focus:ring-accent/50 focus:ring-offset-0'
+
+const radioClasses =
+  'text-accent focus:ring-accent/50 focus:ring-offset-0'
+
 function CollapsibleSection({
   title,
   defaultOpen = false,
@@ -87,15 +93,21 @@ function CollapsibleSection({
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="card mb-4">
+    <div
+      className={`card mb-4 transition-colors ${
+        open ? 'border-l-[3px] border-l-accent' : ''
+      }`}
+    >
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-5 py-3 text-left"
+        className="w-full flex items-center justify-between px-5 py-3 text-left group"
       >
-        <h3 className="text-base font-semibold text-gray-800">{title}</h3>
+        <h3 className="text-base font-display text-codex-text-primary group-hover:text-accent transition-colors">
+          {title}
+        </h3>
         <svg
-          className={`w-5 h-5 text-gray-500 transition-transform ${
+          className={`w-5 h-5 text-codex-text-muted transition-transform group-hover:text-accent ${
             open ? 'rotate-180' : ''
           }`}
           fill="none"
@@ -110,22 +122,41 @@ function CollapsibleSection({
           />
         </svg>
       </button>
-      <div className={`overflow-hidden transition-all duration-200 ease-out ${open ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+      <div
+        className={`overflow-hidden transition-all duration-200 ease-out ${
+          open ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
+        }`}
+      >
         <div className="px-5 pb-4">{children}</div>
       </div>
     </div>
   )
 }
 
-function Label({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
+function Label({
+  children,
+  htmlFor,
+}: {
+  children: React.ReactNode
+  htmlFor?: string
+}) {
   return (
-    <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700 mb-1">
+    <label
+      htmlFor={htmlFor}
+      className="block text-sm font-medium text-codex-text-secondary mb-1.5"
+    >
       {children}
     </label>
   )
 }
 
-function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+function TagInput({
+  tags,
+  onChange,
+}: {
+  tags: string[]
+  onChange: (tags: string[]) => void
+}) {
   const [input, setInput] = useState('')
 
   const addTag = useCallback(() => {
@@ -159,13 +190,13 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[
         {tags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-accent-soft text-accent border border-accent/20"
           >
             {tag}
             <button
               type="button"
               onClick={() => removeTag(i)}
-              className="text-blue-500 hover:text-blue-800"
+              className="text-accent/70 hover:text-accent transition-colors"
             >
               &times;
             </button>
@@ -370,21 +401,24 @@ export default function ConfigPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-        <span className="ml-3 text-gray-500">加载配置中...</span>
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent/30 border-t-accent" />
+        <span className="ml-3 text-codex-text-muted">加载配置中...</span>
       </div>
     )
   }
 
   return (
     <div>
+      {/* ---- Header ---- */}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold text-gray-900">系统配置</h1>
+        <h1 className="font-display text-2xl text-codex-text-primary">
+          <span className="inline-block pb-1 border-b-2 border-accent">系统配置</span>
+        </h1>
         <div className="flex items-center gap-3">
           {message && (
             <span
-              className={`text-sm ${
-                message.type === 'success' ? 'text-green-600' : 'text-red-600'
+              className={`text-sm font-medium ${
+                message.type === 'success' ? 'text-emerald-400' : 'text-red-400'
               }`}
             >
               {message.text}
@@ -396,6 +430,7 @@ export default function ConfigPage() {
         </div>
       </div>
 
+      {/* ---- 模型配置 ---- */}
       <CollapsibleSection title="模型配置" defaultOpen>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -422,7 +457,7 @@ export default function ConfigPage() {
               type="text"
               value={config.models.primary.model}
               onChange={(e) => updateModelField('primary', 'model', e.target.value)}
-              className="input-field"
+              className="input-field font-mono"
             />
           </div>
           <div>
@@ -432,7 +467,7 @@ export default function ConfigPage() {
               type="password"
               value={config.models.primary.api_key}
               onChange={(e) => updateModelField('primary', 'api_key', e.target.value)}
-              className="input-field"
+              className="input-field font-mono"
               placeholder="sk-..."
             />
           </div>
@@ -443,7 +478,7 @@ export default function ConfigPage() {
               type="text"
               value={config.models.primary.base_url}
               onChange={(e) => updateModelField('primary', 'base_url', e.target.value)}
-              className="input-field"
+              className="input-field font-mono"
               placeholder="https://api.openai.com/v1"
             />
           </div>
@@ -454,7 +489,7 @@ export default function ConfigPage() {
               type="number"
               value={config.models.primary.rpm_limit}
               onChange={(e) => updateModelField('primary', 'rpm_limit', Number(e.target.value))}
-              className="input-field"
+              className="input-field font-mono"
               min={1}
             />
           </div>
@@ -465,14 +500,14 @@ export default function ConfigPage() {
               type="number"
               value={config.models.primary.tpm_limit}
               onChange={(e) => updateModelField('primary', 'tpm_limit', Number(e.target.value))}
-              className="input-field"
+              className="input-field font-mono"
               min={1}
             />
           </div>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+        <div className="mt-4 pt-4 border-t border-codex-border">
+          <label className="flex items-center gap-2 text-sm font-medium text-codex-text-secondary cursor-pointer">
             <input
               type="checkbox"
               checked={!!config.models.fallback}
@@ -486,13 +521,13 @@ export default function ConfigPage() {
                   }))
                 }
               }}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className={checkboxClasses}
             />
             启用备用模型
           </label>
 
           {config.models.fallback && (
-            <div className="grid grid-cols-2 gap-4 mt-3 ml-6 p-4 bg-gray-50 rounded-lg">
+            <div className="grid grid-cols-2 gap-4 mt-3 ml-6 p-4 bg-codex-bg-tertiary rounded-lg">
               <div>
                 <Label htmlFor="fallback-provider">备用 Provider</Label>
                 <select
@@ -517,7 +552,7 @@ export default function ConfigPage() {
                   type="text"
                   value={config.models.fallback.model}
                   onChange={(e) => updateModelField('fallback', 'model', e.target.value)}
-                  className="input-field"
+                  className="input-field font-mono"
                 />
               </div>
               <div>
@@ -527,7 +562,7 @@ export default function ConfigPage() {
                   type="password"
                   value={config.models.fallback.api_key}
                   onChange={(e) => updateModelField('fallback', 'api_key', e.target.value)}
-                  className="input-field"
+                  className="input-field font-mono"
                 />
               </div>
               <div>
@@ -537,7 +572,7 @@ export default function ConfigPage() {
                   type="text"
                   value={config.models.fallback.base_url}
                   onChange={(e) => updateModelField('fallback', 'base_url', e.target.value)}
-                  className="input-field"
+                  className="input-field font-mono"
                 />
               </div>
               <div>
@@ -547,7 +582,7 @@ export default function ConfigPage() {
                   type="number"
                   value={config.models.fallback.rpm_limit}
                   onChange={(e) => updateModelField('fallback', 'rpm_limit', Number(e.target.value))}
-                  className="input-field"
+                  className="input-field font-mono"
                 />
               </div>
               <div>
@@ -557,7 +592,7 @@ export default function ConfigPage() {
                   type="number"
                   value={config.models.fallback.tpm_limit}
                   onChange={(e) => updateModelField('fallback', 'tpm_limit', Number(e.target.value))}
-                  className="input-field"
+                  className="input-field font-mono"
                 />
               </div>
             </div>
@@ -565,30 +600,31 @@ export default function ConfigPage() {
         </div>
       </CollapsibleSection>
 
+      {/* ---- 抽取配置 ---- */}
       <CollapsibleSection title="抽取配置">
         <div className="space-y-4">
           <div>
             <Label>抽取粒度</Label>
             <div className="flex gap-6 mt-1">
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-codex-text-secondary cursor-pointer">
                 <input
                   type="radio"
                   name="granularity"
                   value="fine"
                   checked={config.extraction.granularity === 'fine'}
                   onChange={(e) => updateExtraction('granularity', e.target.value)}
-                  className="text-blue-600 focus:ring-blue-500"
+                  className={radioClasses}
                 />
                 精细
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-codex-text-secondary cursor-pointer">
                 <input
                   type="radio"
                   name="granularity"
                   value="balanced"
                   checked={config.extraction.granularity === 'balanced'}
                   onChange={(e) => updateExtraction('granularity', e.target.value)}
-                  className="text-blue-600 focus:ring-blue-500"
+                  className={radioClasses}
                 />
                 平衡
               </label>
@@ -598,25 +634,25 @@ export default function ConfigPage() {
           <div>
             <Label>法规深度</Label>
             <div className="flex gap-6 mt-1">
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-codex-text-secondary cursor-pointer">
                 <input
                   type="radio"
                   name="regulation_depth"
                   value="full"
                   checked={config.extraction.regulation_depth === 'full'}
                   onChange={(e) => updateExtraction('regulation_depth', e.target.value)}
-                  className="text-blue-600 focus:ring-blue-500"
+                  className={radioClasses}
                 />
                 完整条款
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-2 text-sm text-codex-text-secondary cursor-pointer">
                 <input
                   type="radio"
                   name="regulation_depth"
                   value="limited"
                   checked={config.extraction.regulation_depth === 'limited'}
                   onChange={(e) => updateExtraction('regulation_depth', e.target.value)}
-                  className="text-blue-600 focus:ring-blue-500"
+                  className={radioClasses}
                 />
                 摘要要点
               </label>
@@ -673,6 +709,7 @@ export default function ConfigPage() {
         </div>
       </CollapsibleSection>
 
+      {/* ---- 优先级配置 ---- */}
       <CollapsibleSection title="优先级配置">
         <div className="space-y-3">
           {([
@@ -682,13 +719,16 @@ export default function ConfigPage() {
             { key: '标准条款库' as PriorityKey, label: '标准条款库', desc: '标准合同条款模板' },
             { key: '历史合同' as PriorityKey, label: '历史合同', desc: '历史合同中提取的规则' },
           ]).map((item) => (
-            <div key={item.key} className="flex items-center gap-4 py-2 px-3 bg-gray-50 rounded-lg">
-              <span className="w-8 h-8 flex items-center justify-center rounded-full bg-blue-600 text-white text-sm font-bold">
+            <div
+              key={item.key}
+              className="flex items-center gap-4 py-2 px-3 bg-codex-bg-tertiary rounded-lg"
+            >
+              <span className="w-8 h-8 flex items-center justify-center rounded-full bg-accent text-codex-bg text-sm font-bold font-mono">
                 {config.priorities.weights[item.key]}
               </span>
               <div className="flex-1">
-                <div className="text-sm font-medium text-gray-800">{item.label}</div>
-                <div className="text-xs text-gray-500">{item.desc}</div>
+                <div className="text-sm font-medium text-codex-text-primary">{item.label}</div>
+                <div className="text-xs text-codex-text-muted">{item.desc}</div>
               </div>
               <input
                 type="number"
@@ -696,19 +736,20 @@ export default function ConfigPage() {
                 onChange={(e) => updatePriority(item.key, Number(e.target.value))}
                 min={1}
                 max={5}
-                className="w-20 input-field text-center"
+                className="w-20 input-field text-center font-mono"
               />
             </div>
           ))}
         </div>
       </CollapsibleSection>
 
+      {/* ---- 置信度配置 ---- */}
       <CollapsibleSection title="置信度配置">
         <div className="space-y-4">
           <div>
             <div className="flex items-center justify-between">
               <Label>人工复核阈值</Label>
-              <span className="text-sm font-mono text-blue-600">
+              <span className="text-sm font-mono text-accent">
                 {config.confidence.threshold_review.toFixed(2)}
               </span>
             </div>
@@ -719,18 +760,18 @@ export default function ConfigPage() {
               step={0.01}
               value={config.confidence.threshold_review}
               onChange={(e) => updateConfidenceThreshold(Number(e.target.value))}
-              className="w-full mt-1"
+              className="w-full mt-1 accent-amber-500"
             />
-            <div className="flex justify-between text-xs text-gray-400">
+            <div className="flex justify-between text-xs text-codex-text-muted font-mono">
               <span>0</span>
               <span>1</span>
             </div>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-codex-text-muted mt-1">
               低于此阈值的规则标记为"需人工复核"
             </p>
           </div>
 
-          <div className="pt-3 border-t border-gray-200">
+          <div className="pt-3 border-t border-codex-border">
             <Label>权重分配 (必须总和为 1.0)</Label>
             <div className="grid grid-cols-4 gap-4 mt-1">
               {([
@@ -749,16 +790,22 @@ export default function ConfigPage() {
                     min={0}
                     max={1}
                     step={0.01}
-                    className="input-field"
+                    className="input-field font-mono"
                   />
-                  <div className="mt-1 text-xs text-gray-400">
+                  <div className="mt-1 text-xs text-codex-text-muted font-mono">
                     {weights[w.key].toFixed(2)}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="mt-2 text-sm">
-              <span className={weightSum === 1 ? 'text-green-600' : 'text-red-600 font-bold'}>
+            <div className="mt-2 text-sm font-mono">
+              <span
+                className={
+                  weightSum === 1
+                    ? 'text-emerald-400'
+                    : 'text-red-400 font-bold'
+                }
+              >
                 当前总和: {weightSum.toFixed(2)}
               </span>
             </div>
@@ -766,6 +813,7 @@ export default function ConfigPage() {
         </div>
       </CollapsibleSection>
 
+      {/* ---- 并发配置 ---- */}
       <CollapsibleSection title="并发配置">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -775,7 +823,7 @@ export default function ConfigPage() {
               type="number"
               value={config.concurrency.files}
               onChange={(e) => updateConcurrency('files', Number(e.target.value))}
-              className="input-field"
+              className="input-field font-mono"
               min={1}
               max={20}
             />
@@ -787,7 +835,7 @@ export default function ConfigPage() {
               type="number"
               value={config.concurrency.blocks}
               onChange={(e) => updateConcurrency('blocks', Number(e.target.value))}
-              className="input-field"
+              className="input-field font-mono"
               min={1}
               max={50}
             />
@@ -795,17 +843,18 @@ export default function ConfigPage() {
         </div>
       </CollapsibleSection>
 
+      {/* ---- OCR 配置 ---- */}
       <CollapsibleSection title="OCR 配置">
         <div className="space-y-4">
           <Label>PDF OCR</Label>
-          <label className="flex items-center gap-3">
+          <label className="flex items-center gap-3 cursor-pointer">
             <input
               type="checkbox"
               checked={config.ocr.enabled}
               onChange={(e) => updateOcr('enabled', e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className={checkboxClasses}
             />
-            <span className="text-sm text-gray-700">
+            <span className="text-sm text-codex-text-secondary">
               对扫描件 PDF 启用 OCR 文字识别
             </span>
           </label>
@@ -827,6 +876,7 @@ export default function ConfigPage() {
         </div>
       </CollapsibleSection>
 
+      {/* ---- 预算配置 ---- */}
       <CollapsibleSection title="预算配置">
         <div className="space-y-4">
           <div>
@@ -836,23 +886,24 @@ export default function ConfigPage() {
               type="number"
               value={config.budget.max_tokens_per_batch}
               onChange={(e) => updateBudget('max_tokens_per_batch', Number(e.target.value))}
-              className="input-field max-w-xs"
+              className="input-field max-w-xs font-mono"
               min={10000}
               step={10000}
             />
           </div>
-          <label className="flex items-center gap-3">
+          <label className="flex items-center gap-3 cursor-pointer">
             <input
               type="checkbox"
               checked={config.budget.pause_on_overrun}
               onChange={(e) => updateBudget('pause_on_overrun', e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className={checkboxClasses}
             />
-            <span className="text-sm text-gray-700">超出预算时暂停并等待确认</span>
+            <span className="text-sm text-codex-text-secondary">超出预算时暂停并等待确认</span>
           </label>
         </div>
       </CollapsibleSection>
 
+      {/* ---- 存储配置 ---- */}
       <CollapsibleSection title="存储配置">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -862,7 +913,7 @@ export default function ConfigPage() {
               type="text"
               value={config.storage.db_path}
               onChange={(e) => updateStorage('db_path', e.target.value)}
-              className="input-field"
+              className="input-field font-mono"
             />
           </div>
           <div>
@@ -872,14 +923,15 @@ export default function ConfigPage() {
               type="text"
               value={config.storage.exports_dir}
               onChange={(e) => updateStorage('exports_dir', e.target.value)}
-              className="input-field"
+              className="input-field font-mono"
             />
           </div>
         </div>
       </CollapsibleSection>
 
+      {/* ---- 配置方案管理 ---- */}
       <div className="card p-5">
-        <h3 className="text-base font-semibold text-gray-800 mb-4">配置方案管理</h3>
+        <h3 className="text-base font-display text-codex-text-primary mb-4">配置方案管理</h3>
 
         <div className="flex gap-3 mb-4">
           <input
@@ -906,16 +958,16 @@ export default function ConfigPage() {
 
         {profiles.length > 0 && (
           <div className="space-y-2">
-            <div className="text-sm font-medium text-gray-600 mb-2">已保存方案</div>
+            <div className="text-sm font-medium text-codex-text-secondary mb-2">已保存方案</div>
             {profiles.map((p) => (
               <div
                 key={p.name}
-                className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg"
+                className="flex items-center justify-between py-2 px-3 bg-codex-bg-tertiary rounded-lg"
               >
                 <div>
-                  <div className="text-sm font-medium text-gray-800">{p.name}</div>
+                  <div className="text-sm font-medium text-codex-text-primary">{p.name}</div>
                   {p.description && (
-                    <div className="text-xs text-gray-500">{p.description}</div>
+                    <div className="text-xs text-codex-text-muted">{p.description}</div>
                   )}
                 </div>
                 <div className="flex gap-2">

@@ -28,3 +28,4 @@ data/config.yaml
 
 # pytest
 .pytest_cache/
+.gstack/
