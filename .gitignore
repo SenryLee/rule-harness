@@ -17,15 +17,19 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
-# Project data (runtime)
-data/*.sqlite
-data/exports/
-data/config.yaml
+# Project data (runtime) — entire data/ dir is local-only
+data/
 
-# Environment
+# PRD documents (internal, not for public repo)
+*PRD*.md
+*prd*.md
+
+# Environment / secrets
 .env
 .env.local
 
 # pytest
 .pytest_cache/
+
+# Design tooling
 .gstack/

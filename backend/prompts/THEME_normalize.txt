@@ -15,8 +15,8 @@
 规则候选：{rule_json}
 
 输出：
-{{
+{
   "theme_key": string,
   "pending": bool,
   "rationale": string
-}}
+}

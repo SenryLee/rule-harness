@@ -6,9 +6,10 @@ import re
 from pathlib import Path
 
 from ..config import Config
-from ..harness import compute_fingerprint, build_rule_id, validate_atomic
+from ..harness import THEME_KEYS, compute_fingerprint, build_rule_id, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate, map_passthrough_row_to_fields, normalize_risk_label
+from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,7 @@ class DirectPassthroughPipeline:
     def __init__(self, router: LLMRouter, cfg: Config):
         self.router = router
         self.cfg = cfg
-        self._kw_prompt_template = KEYWORD_PROMPT_PATH.read_text(
-            encoding="utf-8"
-        )
+        self._kw_prompt: PromptSections = load_prompt(KEYWORD_PROMPT_PATH)
 
     def applicable(self, doc: ParsedDocument) -> bool:
         return doc.is_passthrough
@@ -104,19 +103,33 @@ class DirectPassthroughPipeline:
         keywords_raw = fields.get("keywords", "")
         kws = _split_keywords(keywords_raw)
 
-        check_item = fields.get("check_item", "")
+        check_item = (fields.get("check_item", "") or "")[:30]
         requirement_raw = fields.get("requirement", "")
-        notes_raw = fields.get("notes", "")
+        notes_raw = (fields.get("notes", "") or "")[:500]
 
-        requirement = _ensure_requirement_tag(requirement_raw)
-
-        rule_type = "governance" if "[合规]" in requirement else "clause"
-
+        requirement = _ensure_requirement_tag(requirement_raw)[:200]
+        rule_type = "governance" if requirement.startswith("[合规]") else "clause"
         theme_key = self._infer_theme_key(check_item, requirement)
 
-        candidate = RuleCandidate(
+        # 关键词兜底：当 Excel 单元格未填关键词时，至少注入 1 个，避免 validate_atomic 失败
+        if not kws:
+            seed = check_item or theme_key.split(".")[-1]
+            if seed:
+                kws = [seed]
+
+        candidate_dict = {
+            "risk_level": risk_level,
+            "keywords": list(kws),
+            "check_item": check_item,
+            "requirement": requirement,
+            "notes": notes_raw,
+            "theme_key": theme_key,
+        }
+        failures = validate_atomic(candidate_dict)
+
+        return RuleCandidate(
             risk_level=risk_level,
-            keywords=tuple(kws) if kws else (),
+            keywords=tuple(kws),
             check_item=check_item,
             requirement=requirement,
             notes=notes_raw,
@@ -137,33 +150,38 @@ class DirectPassthroughPipeline:
             priority=doc.priority,
             contract_types=tuple(doc.contract_types),
             model="passthrough",
-            struct_check_pass=True,
-            struct_failures=(),
+            struct_check_pass=(len(failures) == 0),
+            struct_failures=tuple(failures),
         )
 
-        return candidate
-
     def _infer_theme_key(self, check_item: str, requirement: str) -> str:
-        return "compliance.custom"
+        """Best-effort match against the theme whitelist.
+
+        Walks every known key and checks whether any of its components appear
+        in ``check_item + requirement``. Falls back to ``compliance.custom`` so
+        the row is at least surfaced for human review.
+        """
+        text = (check_item + " " + requirement).lower()
+        best: tuple[int, str] = (0, "")
+        for key in THEME_KEYS:
+            score = sum(1 for part in key.split(".") if part and part in text)
+            if score > best[0]:
+                best = (score, key)
+        return best[1] or "compliance.custom"
 
     async def _expand_keywords(
         self, excerpt: str, primary_kws: str, contract_types: str
     ) -> list[str]:
         try:
-            tpl = self._kw_prompt_template
-            sys_start = tpl.index("[SYSTEM]") + len("[SYSTEM]")
-            sys_end = tpl.index("[USER]")
-            system_seg = tpl[sys_start:sys_end].strip()
-
-            user_start = tpl.index("[USER]") + len("[USER]")
-            user_seg = tpl[user_start:].strip()
-
-            user_rendered = user_seg.format(
-                excerpt=excerpt,
-                primary_keywords=primary_kws,
-                contract_types=contract_types,
+            system_seg, user_rendered = render_system_user(
+                self._kw_prompt,
+                system_vars={},
+                user_vars={
+                    "excerpt": excerpt,
+                    "primary_keywords": primary_kws,
+                    "contract_types": contract_types,
+                },
             )
-
             obj = await self.router.chat_json(
                 system=system_seg,
                 user=user_rendered,

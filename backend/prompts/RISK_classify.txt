@@ -17,7 +17,7 @@
 来源标签：{source_tag}
 
 输出：
-{{
+{
   "final_risk": "高|中|低",
   "rationale": string
-}}
+}

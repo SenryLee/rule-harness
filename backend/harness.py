@@ -59,8 +59,8 @@ def compute_fingerprint(rule: dict) -> str:
         normalize_text(rule.get("theme_key", "")),
         normalize_text(rule.get("subject", "")),
         normalize_text(rule.get("predicate", "")),
-        rule.get("threshold_type", "无"),
-        rule.get("direction", "正向"),
+        normalize_text(rule.get("threshold_type", "无") or "无"),
+        normalize_text(rule.get("direction", "正向") or "正向"),
     ]
     concatenated = "|".join(parts)
     return hashlib.sha256(concatenated.encode()).hexdigest()[:6].upper()
@@ -98,8 +98,9 @@ def validate_atomic(rule: dict) -> list[str]:
     if any(c in check_item for c in CONNECTORS):
         failures.append("check_item_not_atomic")
 
+    # 多阈值检测：同一数字重复出现不算冲突；至少 2 个不同的数字 token 才视为多阈值。
     nums = NUMERIC_RX.findall(requirement)
-    if len(nums) >= 2:
+    if len(set(nums)) >= 2:
         failures.append("requirement_multi_threshold")
 
     if not requirement.startswith(("[条款]", "[合规]")):
@@ -121,3 +122,34 @@ def keyword_appears_in_excerpt(keyword: str, excerpt: str) -> bool:
     if not keyword or not excerpt:
         return False
     return normalize_text(keyword) in normalize_text(excerpt)
+
+
+# ---------------------------------------------------------------------------
+# v1.1 - 第五重门（忠实度）
+# ---------------------------------------------------------------------------
+
+def validate_fidelity(rule: dict, source_excerpt: str) -> list[str]:
+    """对一条规则做数值忠实度校验，返回不能 ground 的 token 列表（空=通过）。
+
+    这是 v1.0 ``validate_atomic`` 的姊妹函数；调用方应同时调用两者。详见
+    :mod:`backend.fidelity`。
+    """
+    from .fidelity import check_fidelity
+
+    result = check_fidelity(
+        requirement=rule.get("requirement", "") or "",
+        check_item=rule.get("check_item", "") or "",
+        notes=rule.get("notes", "") or "",
+        source_excerpt=source_excerpt or "",
+    )
+    return list(result.failures)
+
+
+def validate_voice(rule: dict, source_excerpt: str) -> list[str]:
+    """语态忠实度校验。返回失败项列表（空=通过）。"""
+    from .voice_check import check_voice_match
+
+    return check_voice_match(
+        source_excerpt=source_excerpt or "",
+        requirement=rule.get("requirement", "") or "",
+    )

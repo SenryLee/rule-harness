@@ -421,6 +421,11 @@ def append_variant(rule_id: str, variant: dict) -> RuleMetadataRecord:
     return _row_to_dataclass(row, RuleMetadataRecord)
 
 
+def add_variant(rule_id: str, variant: dict) -> RuleMetadataRecord:
+    """Alias used by merger._persist_decisions."""
+    return append_variant(rule_id, variant)
+
+
 def log_conflict(rule_id: str, rule: dict, batch_id: str) -> RuleRecord:
     notes = rule.get("notes", "")
     conflict_note = f"[CONFLICT] {notes}".strip()
@@ -428,27 +433,42 @@ def log_conflict(rule_id: str, rule: dict, batch_id: str) -> RuleRecord:
     return update_rule(rule_id, updated_rule, batch_id)
 
 
-def log_merge_history(batch_id: str, decision: dict) -> MergeHistoryRecord:
-    now = _now_iso()
-    diff_str = json.dumps(decision.get("diff_payload"), ensure_ascii=False) if decision.get("diff_payload") else ""
+def record_merge_history(
+    batch_id: str,
+    rule_id: str,
+    action: str,
+    diff_payload: str | None = None,
+    operated_at: str | None = None,
+) -> MergeHistoryRecord:
+    """Persist one merge_history row. Used by merger._persist_decisions."""
+    now = operated_at or _now_iso()
     with transaction() as conn:
         cursor = conn.execute(
             """
             INSERT INTO merge_history (batch_id, rule_id, action, diff_payload, operated_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (
-                batch_id,
-                decision.get("rule_id", ""),
-                decision.get("action", "skip"),
-                diff_str,
-                decision.get("operated_at", now),
-            ),
+            (batch_id, rule_id, action, diff_payload or "", now),
         )
         row = conn.execute(
             "SELECT * FROM merge_history WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
     return _row_to_dataclass(row, MergeHistoryRecord)
+
+
+def log_merge_history(batch_id: str, decision: dict) -> MergeHistoryRecord:
+    """Legacy dict-style wrapper kept for backwards compatibility."""
+    return record_merge_history(
+        batch_id=batch_id,
+        rule_id=decision.get("rule_id", ""),
+        action=decision.get("action", "skip"),
+        diff_payload=(
+            json.dumps(decision.get("diff_payload"), ensure_ascii=False)
+            if decision.get("diff_payload")
+            else None
+        ),
+        operated_at=decision.get("operated_at"),
+    )
 
 
 def list_rules(

@@ -1,0 +1,79 @@
+# prompt_id: P3_revision_diff_extract
+# version: 1.0
+# updated: 2026-05-23
+# tested_on: deepseek-chat
+
+[SYSTEM]
+你是一名"修订意图解析器"。Word 文档的修订（插入/删除）反映谈判过程中的让步路径。
+
+你的核心任务**不是**新建规则，而是从原文 → 修订后的变化中提取"可接受替代方案"信息，填到 `fallback_clauses`。仅当修订引入了**全新条款**时，才在 `new_rules` 输出新规则（新规则需满足 P1 的原子化决策树）。
+
+【theme_key 白名单 - 必须严格匹配】
+{theme_keys}
+
+[USER]
+来源文件：{filename}
+段落定位：{location}
+
+【原文】
+{original_text}
+
+【修订后】
+{revised_text}
+
+【diff 摘要】
+{diff_summary}
+
+请输出 JSON。
+
+[FEW-SHOT]
+原文："保密期限自合同终止之日起 5 年。"
+修订后："保密期限自合同终止之日起 3 年。"
+diff 摘要：删除"5 年"，插入"3 年"。
+
+输出：
+{
+  "interpretation": "保密期限由 5 年让步至 3 年",
+  "fallback_clauses": [
+    {
+      "theme_key": "confidentiality.term.duration",
+      "original_position": "5 年",
+      "fallback_position": "3 年",
+      "subject": "受信方",
+      "self_confidence": 0.96
+    }
+  ],
+  "new_rules": []
+}
+
+[OUTPUT FORMAT]
+严格 JSON。
+{
+  "interpretation": string,
+  "fallback_clauses": [
+    {
+      "theme_key": string,
+      "original_position": string,
+      "fallback_position": string,
+      "subject": string,
+      "self_confidence": float
+    }
+  ],
+  "new_rules": [
+    {
+      "risk_level": "高|中|低",
+      "keywords": [string],
+      "check_item": string,
+      "requirement": string,
+      "notes": string,
+      "rule_type": "clause|governance",
+      "theme_key": string,
+      "subject": string,
+      "predicate": string,
+      "threshold_type": "比例|金额|期限|列表|参照|无",
+      "direction": "正向|反向",
+      "self_confidence": float,
+      "uncertainty_points": [string]
+    }
+  ]
+}

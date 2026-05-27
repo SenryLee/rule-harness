@@ -1,0 +1,64 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_BASE_PATH: /rule-harness/
+
+      - name: Add demo banner
+        run: |
+          cat > frontend/dist/demo-banner.js << 'SCRIPT'
+          document.addEventListener('DOMContentLoaded', function() {
+            var banner = document.createElement('div');
+            banner.id = 'demo-banner';
+            banner.innerHTML = '<div style="background:linear-gradient(135deg,#1e40af,#3b82f6);color:#fff;padding:14px 24px;text-align:center;font-size:14px;font-family:Inter,system-ui,sans-serif;position:sticky;top:0;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.15)"><strong>Demo 模式</strong> — 此为在线预览，功能受限。完整使用请克隆仓库并本地运行：<code style="background:rgba(255,255,255,.2);padding:2px 8px;border-radius:4px;margin:0 6px">git clone https://github.com/SenryLee/rule-harness.git &amp;&amp; cd rule-harness &amp;&amp; ./start.sh</code>（需配置你自己的 API Key）</div>';
+            document.body.insertBefore(banner, document.body.firstChild);
+          });
+          SCRIPT
+          sed -i 's|</body>|<script src="demo-banner.js"></script></body>|' frontend/dist/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

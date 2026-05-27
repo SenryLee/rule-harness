@@ -20,6 +20,7 @@ dependencies = [
     "PyMuPDF>=1.24.0",
     "pyyaml>=6.0",
     "openai>=1.40.0",
+    "lxml>=4.9",
 ]
 
 [project.optional-dependencies]
@@ -42,4 +43,10 @@ include = ["backend*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
+pythonpath = ["."]
+markers = [
+    "regression: 华润手册等历史样本的回归测试",
+    "unit: 单元测试",
+    "integration: 集成测试",
+]

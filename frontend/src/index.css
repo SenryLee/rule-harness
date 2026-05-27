@@ -1,5 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
 
+/* 显式锁死 tailwind 配置路径，绕开 .js/.cjs/.mjs 自动发现。
+   含中文路径 + ESM 包时，这是最稳的方案——tailwind 看到这个指令后会用 findAtConfigPath
+   覆盖所有其他来源。 */
+@config "../tailwind.config.cjs";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

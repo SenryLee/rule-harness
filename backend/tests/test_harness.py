@@ -1,19 +1,15 @@
-import sys
-import os
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from harness import (
-    compute_fingerprint,
-    build_rule_id,
-    validate_atomic,
-    keyword_appears_in_excerpt,
-    load_theme_keys,
-    THEME_KEYS,
+from backend.harness import (
     CONTRACT_TYPE_MAP,
     RULE_TYPE_MAP,
+    THEME_KEYS,
+    build_rule_id,
+    compute_fingerprint,
+    keyword_appears_in_excerpt,
+    load_theme_keys,
     normalize_text,
+    validate_atomic,
 )
 
 

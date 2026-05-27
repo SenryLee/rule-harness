@@ -33,6 +33,8 @@ export interface ConfidenceWeights {
   consistency: number;
   struct: number;
   conflict: number;
+  /** v1.1: 数值忠实度门权重。后端默认返回 0.30。老配置可缺。 */
+  fidelity?: number;
 }
 
 export interface ConfigConfidence {
@@ -89,6 +91,37 @@ export interface Batch {
   finished_at: string | null;
   status: string;
   stats: BatchStats;
+  total_files?: number;
+  file_metas?: CreateBatchMeta[];
+  summary?: BatchStats;
+}
+
+export interface PipelineFileState {
+  filename: string;
+  status: 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+  blocks_total: number;
+  blocks_done: number;
+  rules_emitted: number;
+  skip_reason?: string | null;
+}
+
+export interface PipelineState {
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+  files_total: number;
+  files_done: number;
+  blocks_total: number;
+  blocks_done: number;
+  rules_emitted: number;
+  skip_reason?: string | null;
+  files?: Record<string, PipelineFileState>;
+}
+
+export interface FidelityStats {
+  intercepted: number;
+  placeholders: number;
+  discarded: number;
+  voice_mismatch: number;
 }
 
 export interface BatchProgress {
@@ -100,7 +133,9 @@ export interface BatchProgress {
   processed_blocks: number;
   total_rules: number;
   tokens_used: number;
-  errors: number;
+  errors: string[];
+  pipeline_progress?: Record<string, PipelineState>;
+  fidelity_stats?: FidelityStats;
 }
 
 export interface RuleItem {
@@ -117,7 +152,9 @@ export interface RuleItem {
   version?: number;
   source_file?: string;
   source_filename?: string;
+  source_tag?: string;
   pipeline?: string;
+  self_confidence?: number;
   confidence_self?: number;
   confidence_consistency?: number;
   confidence_struct?: number;
@@ -126,6 +163,7 @@ export interface RuleItem {
   confidence?: number;
   variants?: unknown[];
   ladder_info?: unknown;
+  ladder?: Record<string, string>;
   cited_cases?: unknown[];
   conflict_flag?: string;
   batch_id?: string;
@@ -145,6 +183,10 @@ export interface RuleItem {
   ladder_preferred?: string;
   ladder_acceptable?: string;
   ladder_unacceptable?: string;
+  fidelity_pass?: boolean;
+  fidelity_failures?: string[];
+  voice_match?: boolean;
+  output_target?: 'main' | 'placeholder' | 'discarded' | 'negotiation' | string;
 }
 
 export interface RuleListResponse {
@@ -158,6 +200,12 @@ export interface Profile {
   name: string;
   label?: string;
   description: string;
+  /** 行业词表（后端 yaml 里的 vocabulary 字段，返回的是数组）。 */
+  vocabulary?: string[] | string;
+  /** 关注要点（后端 yaml 里的 focus_points 字段，多行字符串）。 */
+  focus_points?: string;
+  /** 业务优先级覆盖（高/中/低）。 */
+  priority_overrides?: Record<string, string>;
 }
 
 export type ProfilesResponse = Profile[];
@@ -199,6 +247,7 @@ export interface BatchRuleFilters {
   conflict_flag?: string;
   contract_type?: string;
   source_file?: string;
+  output_target?: string;
   page?: number;
   page_size?: number;
 }
@@ -291,8 +340,38 @@ export function saveProfile(name: string, config: Config): Promise<void> {
 export interface CreateBatchMeta {
   source_tag: string;
   contract_types: string[];
+  our_party?: string;
   is_scanned?: boolean;
+  is_redline?: boolean;
+  is_case?: boolean;
   jurisdiction?: string;
+}
+
+export interface PreviewClassifyResponse {
+  filename: string;
+  suggested_source_tag: string;
+  suggested_contract_types: string[];
+  suggested_our_party: string;
+  confidence: number;
+  source_confidence?: number;
+  contract_confidence?: number;
+  party_confidence?: number;
+  auto_apply?: boolean;
+  auto_apply_source?: boolean;
+  auto_apply_contract?: boolean;
+  auto_apply_party?: boolean;
+  suggested_is_case?: boolean;
+  suggested_is_redline?: boolean;
+  evidence: string[];
+}
+
+export function previewClassify(file: File): Promise<PreviewClassifyResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request<PreviewClassifyResponse>('/api/preview-classify', {
+    method: 'POST',
+    body: formData,
+  });
 }
 
 export interface CreateBatchResponse {
@@ -329,7 +408,15 @@ export function fetchBatchRules(id: string, filters: BatchRuleFilters = {}): Pro
   return request<RuleListResponse>(`/api/batches/${encodeURIComponent(id)}/rules${qs}`);
 }
 
-export type ExportKind = 'main-csv' | 'metadata-csv' | 'conflict-report' | 'change-set';
+export type ExportKind =
+  | 'main-csv'
+  | 'metadata-csv'
+  | 'conflict-report'
+  | 'change-set'
+  | 'placeholders-csv'
+  | 'discarded-csv'
+  | 'negotiation-csv'
+  | 'summary';
 
 export function downloadExport(id: string, kind: ExportKind): void {
   const url = `/api/batches/${encodeURIComponent(id)}/exports/${kind}`;

@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, compute_fingerprint, validate_atomic, build_rule_id
+from ..harness import THEME_KEYS, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate
+from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +23,10 @@ class P1BodyPipeline:
     def __init__(self, router: LLMRouter, cfg: Config):
         self.router = router
         self.cfg = cfg
-        self._prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
+        self._prompt: PromptSections = load_prompt(PROMPT_PATH)
 
     def applicable(self, doc: ParsedDocument) -> bool:
-        return not doc.is_passthrough and not doc.is_case_doc and not doc.is_redline_doc
+        return not doc.is_passthrough and not doc.is_redline_doc
 
     async def extract(self, doc: ParsedDocument, ctx: dict) -> list[RuleCandidate]:
         sem = asyncio.Semaphore(self.cfg.concurrency.blocks)
@@ -107,45 +108,60 @@ class P1BodyPipeline:
     def _render_prompt(
         self, doc: ParsedDocument, block, ctx: dict
     ) -> tuple[str, str]:
-        tpl = self._prompt_template
-
-        sys_start = tpl.index("[SYSTEM]") + len("[SYSTEM]")
-        sys_end = tpl.index("[USER]")
-        system_segment = tpl[sys_start:sys_end].strip()
-
-        user_start = tpl.index("[USER]") + len("[USER]")
-        few_shot_start = tpl.index("[FEW-SHOT 1")
-        user_segment = tpl[user_start:few_shot_start].strip()
-
-        rest = tpl[few_shot_start:]
-
-        redline_raw = self.cfg.extraction.redline_keywords
-        redline_text = ", ".join(redline_raw) if redline_raw else "无"
-
+        redline_text = ", ".join(self.cfg.extraction.redline_keywords) or "无"
         theme_keys_text = "\n".join(sorted(THEME_KEYS))
-
-        industry_text = ctx.get("industry_context", "")
-        if not industry_text:
-            industry_text = self.cfg.extraction.industry_vocabulary or "无"
-
-        system_rendered = system_segment.format(
-            redline_keywords=redline_text,
-            theme_keys=theme_keys_text,
-            industry_context=industry_text,
+        industry_text = (
+            ctx.get("industry_context")
+            or self.cfg.extraction.industry_vocabulary
+            or "无"
         )
-
         jurisdiction = ctx.get("jurisdiction", "中国大陆")
         contract_types_str = ", ".join(doc.contract_types) if doc.contract_types else "通用"
 
-        user_rendered = user_segment.format(
-            filename=doc.filename,
-            source_tag=doc.source_tag,
-            priority=doc.priority,
-            contract_types=contract_types_str,
-            jurisdiction=jurisdiction,
-            location=block.location,
-            block_text=block.text,
+        return render_system_user(
+            self._prompt,
+            system_vars={
+                "redline_keywords": redline_text,
+                "theme_keys": theme_keys_text,
+                "industry_context": industry_text,
+                "coverage_policy": _coverage_policy(self.cfg),
+            },
+            user_vars={
+                "filename": doc.filename,
+                "source_tag": doc.source_tag,
+                "priority": str(doc.priority),
+                "contract_types": contract_types_str,
+                "jurisdiction": jurisdiction,
+                "location": block.location,
+                "block_text": block.text,
+            },
         )
 
-        full_user = user_rendered + "\n\n" + rest
-        return system_rendered, full_user
+
+def _coverage_policy(cfg: Config) -> str:
+    if cfg.extraction.granularity == "fine":
+        granularity = (
+            "当前为 fine：以少漏审为优先。每个段落都要寻找可复用审查口径；"
+            "同一段存在多个条件、主体、例外、证据点、风险后果时，必须拆成多条原子规则。"
+        )
+    else:
+        granularity = (
+            "当前为 balanced：优先抽取稳定、可复用的审查口径；仍需拆分同段内明确独立的条件、主体、阈值和例外。"
+        )
+
+    if cfg.extraction.regulation_depth == "full":
+        depth = (
+            "法规深度为 full：法规、裁判规则、证据规则、效力边界、成立要件、例外条件和审查建议均应规则化；"
+            "不得因原文是解释性/分析性文字就跳过。"
+        )
+    else:
+        depth = "法规深度为 limited：保留核心成立要件、禁止性规则和高风险例外。"
+
+    return (
+        f"{granularity}\n{depth}\n"
+        "- D=0 只能跳过纯背景、目录、事实经过、无可复用审查口径的句子。\n"
+        "- 若段落包含裁判摘要、法院认为、法律后果、举证责任、证据适用、合同效力、撤销/解除条件、登记/公示效力等内容，"
+        "即使没有'应当/不得'，也要转化为 [条款]/[合规] 审查规则。\n"
+        "- 对案例/法律分析文本，输出应围绕'以后审合同时要检查什么、避免什么、补什么证据'，不要只做案情总结。\n"
+        "- 没有具体数值时不要编造阈值，threshold_type 使用 无/列表/参照，并在 notes 说明原文依据。"
+    )

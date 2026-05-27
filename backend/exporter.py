@@ -14,6 +14,29 @@ _MAIN_CSV_HEADERS = [
     "检查项", "审查要求", "审查说明",
 ]
 
+
+def _partition_by_target(rules: list[RuleCandidate]) -> dict[str, list[RuleCandidate]]:
+    """v1.1: 按 ``output_target`` 把规则分桶。
+
+    四类：
+      - ``main`` 实质规则（默认）
+      - ``placeholder`` 占位规则（LLM 自承无内容 / 低置信 / 原文含占位符）
+      - ``negotiation`` 谈判阶梯规则（仅 P4 在红线文件上产出）
+      - ``discarded`` 忠实度校验严重失败，转写到审计文件
+
+    未知 target 默认按 main 处理（向后兼容）。
+    """
+    buckets: dict[str, list[RuleCandidate]] = {
+        "main": [],
+        "placeholder": [],
+        "negotiation": [],
+        "discarded": [],
+    }
+    for rule in rules:
+        target = getattr(rule, "output_target", "main") or "main"
+        buckets.setdefault(target, []).append(rule)
+    return buckets
+
 _METADATA_CSV_HEADERS = [
     "规则项id", "规则类型", "适用合同类型", "法域",
     "来源文件名", "来源文件sha256", "来源页码或段落", "原文片段",
@@ -24,12 +47,18 @@ _METADATA_CSV_HEADERS = [
     "首次入库批次", "最近更新批次", "抽取时间戳", "版本号",
     "subject", "predicate", "threshold_type", "direction",
     "uncertainty_points",
+    # v1.1
+    "忠实度通过", "忠实度失败项", "语态匹配", "输出目标",
 ]
 
 
 def export_main_csv(
     rules: list[RuleCandidate], output_path: Path
 ) -> None:
+    """写出严格 7 列主 CSV。v1.1 修订：只接收 output_target == "main" 的规则。
+
+    调用方（orchestrator）有责任在传入前过滤掉 placeholder / discarded。
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -38,14 +67,92 @@ def export_main_csv(
 
         for rule in rules:
             keywords_str = ", ".join(rule.keywords) if rule.keywords else ""
+            enabled_label = getattr(rule, "enabled", "启用") or "启用"
             writer.writerow([
                 getattr(rule, "rule_id", ""),
-                "启用",
+                enabled_label,
                 rule.risk_level,
                 keywords_str,
                 rule.check_item,
                 rule.requirement,
                 rule.notes,
+            ])
+
+
+def export_placeholders_csv(
+    rules: list[RuleCandidate], output_path: Path
+) -> None:
+    """占位规则单独导出，结构同主 CSV，方便人工审视哪些位置需补充。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_MAIN_CSV_HEADERS + ["占位说明", "原文片段"])
+        for rule in rules:
+            keywords_str = ", ".join(rule.keywords) if rule.keywords else ""
+            placeholder_reason = (
+                "阈值类型=占位"
+                if rule.threshold_type == "占位"
+                else f"低置信({rule.self_confidence:.2f})" if rule.self_confidence < 0.4
+                else "notes 含占位关键词"
+            )
+            writer.writerow([
+                getattr(rule, "rule_id", ""),
+                getattr(rule, "enabled", "启用") or "启用",
+                rule.risk_level,
+                keywords_str,
+                rule.check_item,
+                rule.requirement,
+                rule.notes,
+                placeholder_reason,
+                rule.source_excerpt[:300],
+            ])
+
+
+def export_discarded_csv(
+    rules: list[RuleCandidate], output_path: Path
+) -> None:
+    """忠实度严重失败被弃用的候选规则，供审计；不进主 CSV。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "规则项id", "风险程度", "检查项", "审查要求",
+            "忠实度失败 token", "来源文件", "原文片段",
+        ])
+        for rule in rules:
+            writer.writerow([
+                getattr(rule, "rule_id", ""),
+                rule.risk_level,
+                rule.check_item,
+                rule.requirement,
+                ", ".join(rule.fidelity_failures),
+                rule.source_filename,
+                rule.source_excerpt[:300],
+            ])
+
+
+def export_negotiation_csv(
+    rules: list[RuleCandidate], output_path: Path
+) -> None:
+    """P4 红线管道在显式标记的谈判红线文件上产出的阶梯规则。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "规则项id", "风险程度", "检查项", "审查要求", "审查说明",
+            "首选", "可接受", "不可接受",
+        ])
+        for rule in rules:
+            ladder = rule.ladder or {}
+            writer.writerow([
+                getattr(rule, "rule_id", ""),
+                rule.risk_level,
+                rule.check_item,
+                rule.requirement,
+                rule.notes,
+                ladder.get("preferred", ""),
+                ladder.get("acceptable", ""),
+                ladder.get("unacceptable", ""),
             ])
 
 
@@ -96,6 +203,11 @@ def export_metadata_csv(
                 rule.threshold_type,
                 rule.direction,
                 uncertainties_str,
+                # v1.1
+                int(getattr(rule, "fidelity_pass", True)),
+                ", ".join(getattr(rule, "fidelity_failures", ()) or ()),
+                int(getattr(rule, "voice_match", True)),
+                getattr(rule, "output_target", "main"),
             ])
 
 
@@ -106,7 +218,7 @@ def _rule_type_label(rule_type: str) -> str:
 
 
 def _get_jurisdiction(rule: RuleCandidate) -> str:
-    return "中国大陆"
+    return getattr(rule, "jurisdiction", "") or "中国大陆"
 
 
 def export_conflict_report(

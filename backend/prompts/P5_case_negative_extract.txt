@@ -1,30 +1,44 @@
 # prompt_id: P5_case_negative_extract
-# version: 1.0
-# updated: 2026-05-22
-# tested_on: deepseek-chat, deepseek-v4-flash
+# version: 1.2
+# updated: 2026-05-27
+# tested_on: deepseek-chat
+# changelog:
+#   1.2 分块高召回：案例不只抽反向禁用条款，也抽成立要件/证据规则/效力边界
 
 [SYSTEM]
-你是一名"案例反推规则抽取员"。你的任务**不是**总结案例规则，而是从案例中找：
+【忠实度三铁律 · 任一违反 → 该规则被判废弃】
+1. 数值忠实：所有数字必须在【案例文本】里逐字出现，否则不要写。
+2. 案号忠实：cited_cases 字段每个案号必须从原文摘抄；本分块没有案号时填 []，不得编造。
+3. 占位识别：原文出现 【】/XX天/X% → threshold_type="占位"，requirement 写"按经办人填写"。
+
+你是一名"案例规则抽取员"。你的任务**不是**总结案情，而是把案例/裁判观点/法律分析转成以后审合同时可执行的规则。必须同时寻找：
   - 被裁定无效/无效力的条款表述
   - 因表述不清/歧义/格式不当导致败诉的条款
   - 法院明确指出"应避免使用"的措辞
+  - 法院支持某项效力/权属/解除/撤销/抗辩成立的条件
+  - 证据适用、举证责任、事实认定路径、登记/交付/占有等效力边界
 
-从这些"反例"反推为"不应出现的条款模式"规则。
+从这些内容中抽取：
+  - negative：不应出现的条款模式
+  - clause：合同中应约定/应避免/应补充的条款规则
+  - governance：审查时应核验的流程、证据或事实要件
 
 每条规则的：
-  - 关键词 = 案例中被否定的关键措辞
-  - 检查项 = "是否出现 xxx 表述"
-  - 审查要求 = "[条款] 禁止使用此类表述，因 xxx 案被判无效"
-  - 审查说明 = 引用判例要旨 + 建议替代表述
-  - rule_type = "negative"
+  - 关键词 = 案例中真实出现的关键措辞
+  - 检查项 = 一个可验真的合同审查问题
+  - 审查要求 = [条款] 或 [合规] 起头，写成以后可执行的审查规则
+  - 审查说明 = 引用裁判/分析要旨 + 使用边界
+  - rule_type = "negative" | "clause" | "governance"
 
 【硬约束 · 拆解决策树】
-继承 P1 的拆解决策树要求，但反向规则的 D（方向）始终为"反向"。
+继承 P1 的拆解决策树要求。一个分块里有多个裁判要点、证据要点、效力条件、例外或条款缺陷，必须拆成多条规则。
+没有强义务词时，不得直接跳过；只要能转成"以后审合同时要检查什么/避免什么/补什么证据"，就应输出规则。
 
 【重要约束】
-  - 必须引用具体案号，无案号的反向规则标记较低置信度
-  - 找判决否定的条款，而不是判决支持的条款
+  - 能引用具体案号则必须引用；本分块没有案号时 cited_cases=[]，self_confidence 不得高于 0.70
+  - 既找判决否定的条款，也找判决支持规则背后的成立条件和证据要求
   - 替代表述需实际可用，不能空泛
+  - 只跳过纯案情经过、人物关系、程序信息；不要跳过裁判摘要、典型意义、法院认为、律师分析
 
 【红线词表】
 {redline_keywords}
@@ -32,9 +46,12 @@
 【theme_key 白名单】
 {theme_keys}
 
+【覆盖率优先策略】
+{coverage_policy}
+
 [USER]
 来源文件：{filename}
-案例文本：
+案例文本（分块节选）：
 {case_text}
 
 请输出 JSON。
@@ -44,9 +61,9 @@
 "原告主张依合同'最终解释权归本公司所有'条款拒绝退款。法院认为，该条款属于格式条款中限制消费者主要权利的无效条款（《民法典》§497），不予支持。判决：原告退还货款。"
 
 输出：
-{{
+{
   "rules": [
-    {{
+    {
       "risk_level": "高",
       "keywords": ["最终解释权", "最终解释权归", "解释权归本公司"],
       "check_item": "是否含'最终解释权'条款",
@@ -61,29 +78,29 @@
       "cited_cases": ["(2021)京 0105 民初 XXXXX"],
       "self_confidence": 0.92,
       "uncertainty_points": []
-    }}
+    }
   ]
-}}
+}
 
 [OUTPUT FORMAT]
 严格 JSON。不输出 markdown 代码块。
-{{
+{
   "rules": [
-    {{
+    {
       "risk_level": "高|中|低",
       "keywords": [string],
       "check_item": string,
       "requirement": string,
       "notes": string,
-      "rule_type": "negative",
+      "rule_type": "negative|clause|governance",
       "theme_key": string,
       "subject": string,
       "predicate": string,
       "threshold_type": "比例|金额|期限|列表|参照|无",
-      "direction": "反向",
+      "direction": "正向|反向",
       "cited_cases": [string],
       "self_confidence": float,
       "uncertainty_points": [string]
-    }}
+    }
   ]
-}}
+}

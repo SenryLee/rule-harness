@@ -3,6 +3,7 @@ import {
   fetchConfig,
   updateConfig,
   fetchProfiles,
+  fetchProfile,
   saveProfile,
   deleteProfile,
 } from '../api';
@@ -62,8 +63,9 @@ const DEFAULT_CONFIG: Config = {
     weights: {
       self: 0.25,
       consistency: 0.25,
-      struct: 0.25,
-      conflict: 0.25,
+      struct: 0.15,
+      conflict: 0.05,
+      fidelity: 0.30,
     },
   },
   concurrency: {
@@ -144,68 +146,202 @@ function Label({ children, htmlFor }: { children: React.ReactNode; htmlFor?: str
   );
 }
 
-function TagInput({
-  tags,
+/**
+ * v1.1: 红线关键词复选选择器。
+ *
+ * 设计理由：实测中"输入回车追加"对法务用户太不直观。改为内置词表勾选 + 自定义
+ * 追加的组合形态：
+ *   - 内置词表分 4 组（强义务 / 责任与赔偿 / 争议解决 / 合规高敏），覆盖 80% 场景；
+ *   - 自定义 chip 区显示已添加的非内置词；
+ *   - 顶部"全选 / 全不选"快捷键。
+ */
+const REDLINE_PRESETS: { group: string; words: string[] }[] = [
+  {
+    group: '强义务 / 禁止',
+    words: ['不得', '禁止', '必须', '应当', '严禁', '红线', '重大', '无效'],
+  },
+  {
+    group: '责任与赔偿',
+    words: [
+      '无限责任', '最高限额', '赔偿上限', '违约金',
+      '损害赔偿', '间接损失', '可得利益', '惩罚性赔偿',
+    ],
+  },
+  {
+    group: '争议解决与法律适用',
+    words: ['仲裁', '管辖', '法律适用', '法律选择', '不可转让'],
+  },
+  {
+    group: '合规高敏',
+    words: [
+      '反贿赂', '反洗钱', '数据出境', '个人信息', '制裁',
+      '独占许可', '排他许可', '永久许可', '全球范围',
+    ],
+  },
+];
+
+const BUILTIN_PROFILE_NAMES = new Set([
+  '建工·总包',
+  '建工·勘察设计',
+  '房地产',
+  '金融',
+  '医药',
+  'IT',
+  '制造',
+  '能源·电力',
+  '汽车',
+  '通用商事',
+  '建筑',
+  '建工勘察设计',
+  '能源电力',
+  'test',
+]);
+
+function RedlineKeywordsPicker({
+  selected,
   onChange,
 }: {
-  tags: string[];
-  onChange: (tags: string[]) => void;
+  selected: string[];
+  onChange: (next: string[]) => void;
 }) {
-  const [input, setInput] = useState('');
+  const [customInput, setCustomInput] = useState('');
+  const presetSet = new Set(REDLINE_PRESETS.flatMap((g) => g.words));
+  const customWords = selected.filter((w) => !presetSet.has(w));
 
-  const addTag = useCallback(() => {
-    const trimmed = input.trim();
-    if (trimmed && !tags.includes(trimmed)) {
-      onChange([...tags, trimmed]);
-      setInput('');
+  const toggleWord = (word: string) => {
+    if (selected.includes(word)) {
+      onChange(selected.filter((w) => w !== word));
+    } else {
+      onChange([...selected, word]);
     }
-  }, [input, tags, onChange]);
+  };
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addTag();
-      }
-    },
-    [addTag],
+  const allPresetSelected = REDLINE_PRESETS.every((g) =>
+    g.words.every((w) => selected.includes(w)),
   );
 
+  const toggleAllPresets = () => {
+    if (allPresetSelected) {
+      onChange(selected.filter((w) => !presetSet.has(w)));
+    } else {
+      const allPreset = REDLINE_PRESETS.flatMap((g) => g.words);
+      const merged = Array.from(new Set([...selected, ...allPreset]));
+      onChange(merged);
+    }
+  };
+
+  const addCustom = () => {
+    const trimmed = customInput.trim();
+    if (trimmed && !selected.includes(trimmed)) {
+      onChange([...selected, trimmed]);
+      setCustomInput('');
+    }
+  };
+
   return (
-    <div>
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {tags.map((tag, i) => (
-          <span
-            key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-primary-soft text-primary border border-primary/20"
-          >
-            {tag}
-            <button
-              type="button"
-              onClick={() => onChange(tags.filter((_, idx) => idx !== i))}
-              className="text-primary/60 hover:text-primary transition-colors"
-            >
-              &times;
-            </button>
-          </span>
+    <div className="space-y-3">
+      {/* 全选 / 反选 */}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-gray-500">
+          已选 <span className="font-semibold text-primary">{selected.length}</span> 项
+        </span>
+        <button
+          type="button"
+          onClick={toggleAllPresets}
+          className="text-primary hover:underline"
+        >
+          {allPresetSelected ? '清空预设' : '全选预设'}
+        </button>
+      </div>
+
+      {/* 预设分组 */}
+      <div className="space-y-3">
+        {REDLINE_PRESETS.map((group) => (
+          <div key={group.group}>
+            <div className="text-xs font-medium text-gray-500 mb-1.5">
+              {group.group}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {group.words.map((word) => {
+                const checked = selected.includes(word);
+                return (
+                  <button
+                    key={word}
+                    type="button"
+                    onClick={() => toggleWord(word)}
+                    className={
+                      checked
+                        ? 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-primary text-white border border-primary'
+                        : 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs text-gray-700 border border-air-border hover:border-primary hover:text-primary transition-colors'
+                    }
+                  >
+                    {checked && (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                    {word}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ))}
       </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="输入后按回车添加"
-          className="input-field flex-1"
-        />
-        <button type="button" onClick={addTag} className="btn-secondary text-sm">
-          添加
-        </button>
+
+      {/* 自定义追加 */}
+      <div>
+        <div className="text-xs font-medium text-gray-500 mb-1.5">
+          自定义关键词
+        </div>
+        {customWords.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {customWords.map((word) => (
+              <span
+                key={word}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"
+              >
+                {word}
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((w) => w !== word))}
+                  className="text-amber-500 hover:text-amber-700"
+                >
+                  &times;
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={customInput}
+            onChange={(e) => setCustomInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addCustom();
+              }
+            }}
+            placeholder="输入自定义词，回车追加"
+            className="input-field flex-1 text-sm"
+          />
+          <button
+            type="button"
+            onClick={addCustom}
+            disabled={!customInput.trim()}
+            className="btn-secondary text-sm disabled:opacity-40"
+          >
+            添加
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
+// 旧的 TagInput 已被 RedlineKeywordsPicker 取代；如未来需要自由输入 tag，可在此重建。
 
 /* ──────────────── Main Component ──────────────── */
 
@@ -215,7 +351,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [newProfileName, setNewProfileName] = useState('');
+  const [selectedProfileName, setSelectedProfileName] = useState('');
 
   /* ─── Load config ─── */
   useEffect(() => {
@@ -228,6 +364,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
             cfg = { ...cfg, models: { ...cfg.models, fallback: null } };
           }
           setConfig(cfg);
+          setSelectedProfileName(cfg.extraction.industry_preset || '');
         }
       })
       .catch((err) => {
@@ -279,12 +416,26 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
   );
 
   const handleImportProfile = useCallback(async (name: string) => {
+    if (!name) return;
     setMessage(null);
     try {
-      const { fetchProfile } = await import('../api');
       const profile = await fetchProfile(name);
-      setConfig(profile as unknown as Config);
-      setMessage({ type: 'success', text: `已导入方案: ${name}` });
+      // FIX #5 + #7：profile 是行业预设（只含 vocabulary / focus_points 等少量字段），
+      // 不能直接覆盖 config（会让 config.models / config.confidence 等关键字段变 undefined
+      // → 渲染时白屏）。正确做法：把预设内容 merge 进 config.extraction 对应字段。
+      setConfig((prev) => ({
+        ...prev,
+        extraction: {
+          ...prev.extraction,
+          industry_preset: name,
+          industry_vocabulary: Array.isArray(profile.vocabulary)
+            ? profile.vocabulary.join('\n')
+            : (profile.vocabulary || ''),
+          industry_focus_points: profile.focus_points || '',
+        },
+      }));
+      setSelectedProfileName(name);
+      setMessage({ type: 'success', text: `已应用方案: ${name}（行业词表/关注要点已注入）` });
       setTimeout(() => setMessage(null), 3000);
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : '导入失败' });
@@ -292,16 +443,33 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
   }, []);
 
   const handleDeleteProfile = useCallback(async (name: string) => {
+    if (!name) return;
+    const profile = profiles.find((p) => p.name === name);
+    const label = profile?.label || profile?.name || name;
+    if (BUILTIN_PROFILE_NAMES.has(name) || BUILTIN_PROFILE_NAMES.has(label)) {
+      setMessage({ type: 'error', text: '内置方案不可删除' });
+      return;
+    }
+    if (!confirm(`确认删除方案: ${label}？`)) return;
     try {
       await deleteProfile(name);
       setMessage({ type: 'success', text: `已删除方案: ${name}` });
       const res = await fetchProfiles();
       setProfiles(Array.isArray(res) ? res : []);
+      if (selectedProfileName === name) setSelectedProfileName('');
       setTimeout(() => setMessage(null), 3000);
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : '删除失败' });
     }
-  }, []);
+  }, [profiles, selectedProfileName]);
+
+  const handleSaveAsProfile = useCallback(async () => {
+    const name = prompt('请输入新方案名称');
+    const trimmed = name?.trim();
+    if (!trimmed) return;
+    await handleExportProfile(trimmed);
+    setSelectedProfileName(trimmed);
+  }, [handleExportProfile]);
 
   /* ─── Field updaters ─── */
   const updateModelField = useCallback(
@@ -309,10 +477,10 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
       setConfig((prev) => {
         const models = { ...prev.models };
         if (target === 'primary') {
-          models.primary = { ...models.primary, [field]: value };
+          models.primary = { ...models.primary, [field]: value } as typeof models.primary;
         } else {
           const fb = models.fallback || models.primary;
-          models.fallback = { ...fb, [field]: value };
+          models.fallback = { ...fb, [field]: value } as typeof models.primary;
         }
         return { ...prev, models };
       });
@@ -389,8 +557,23 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
     }));
   }, []);
 
-  const weights = config.confidence.weights;
-  const weightSum = weights.self + weights.consistency + weights.struct + weights.conflict;
+  // 防御性读取：v1.1 后端返回 5 项（含 fidelity）；旧版本只有 4 项。
+  // 如果 config.confidence 因任何原因为 undefined，渲染前给一个默认值兜底，
+  // 不让 React 在 .weights.self 处 throw。
+  const weights = config.confidence?.weights ?? {
+    self: 0.25,
+    consistency: 0.25,
+    struct: 0.15,
+    conflict: 0.05,
+    fidelity: 0.30,
+  };
+  const weightSum =
+    (weights.self ?? 0) +
+    (weights.consistency ?? 0) +
+    (weights.struct ?? 0) +
+    (weights.conflict ?? 0) +
+    ((weights as { fidelity?: number }).fidelity ?? 0);
+  const weightSumOk = Math.abs(weightSum - 1) < 0.001;
 
   /* ─── Render ─── */
   return (
@@ -421,7 +604,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
               disabled={saving}
               className="btn-primary"
             >
-              {saving ? '保存中...' : '保存配置'}
+              {saving ? '保存中...' : '保存为全局默认'}
             </button>
             <button
               type="button"
@@ -444,6 +627,55 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
             </div>
           ) : (
             <>
+              {/* ─── 方案管理 ─── */}
+              <div className="card p-5 mb-4 border-l-[3px] border-l-primary">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">方案管理</h3>
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-3 items-end">
+                  <div>
+                    <Label htmlFor="profile-select">当前方案</Label>
+                    <select
+                      id="profile-select"
+                      value={selectedProfileName}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setSelectedProfileName(name);
+                        if (name) handleImportProfile(name);
+                      }}
+                      className="select-field"
+                    >
+                      <option value="">通用 / 未选择方案</option>
+                      {profiles.map((profile) => (
+                        <option key={profile.name} value={profile.name}>
+                          {profile.label || profile.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button type="button" onClick={handleSaveAsProfile} className="btn-secondary text-sm">
+                    另存为方案
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleImportProfile(selectedProfileName)}
+                    disabled={!selectedProfileName}
+                    className="btn-secondary text-sm"
+                  >
+                    导入方案
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProfile(selectedProfileName)}
+                    disabled={!selectedProfileName}
+                    className="btn-danger text-sm"
+                  >
+                    删除方案
+                  </button>
+                </div>
+                <div className="text-xs text-gray-400 mt-3">
+                  方案会注入行业词表和关注要点；保存为全局默认会写入当前系统配置。
+                </div>
+              </div>
+
               {/* ─── 模型配置 ─── */}
               <CollapsibleSection title="模型配置" defaultOpen>
                 <div className="grid grid-cols-2 gap-4">
@@ -663,29 +895,13 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                   </div>
 
                   <div>
-                    <Label htmlFor="industry-preset">行业预设</Label>
-                    <select
-                      id="industry-preset"
-                      value={config.extraction.industry_preset || ''}
-                      onChange={(e) => updateExtraction('industry_preset', e.target.value || null)}
-                      className="select-field"
-                    >
-                      <option value="">通用</option>
-                      <option value="金融">金融</option>
-                      <option value="医药">医药</option>
-                      <option value="IT">IT</option>
-                      <option value="建筑">建筑</option>
-                    </select>
-                  </div>
-
-                  <div>
                     <Label htmlFor="industry-vocab">行业词汇 (每行一个)</Label>
                     <textarea
                       id="industry-vocab"
                       value={config.extraction.industry_vocabulary}
                       onChange={(e) => updateExtraction('industry_vocabulary', e.target.value)}
-                      rows={3}
-                      className="input-field"
+                      rows={14}
+                      className="input-field font-mono text-xs"
                       placeholder="供应链金融&#10;保理&#10;福费廷"
                     />
                   </div>
@@ -696,16 +912,16 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                       id="focus-points"
                       value={config.extraction.industry_focus_points}
                       onChange={(e) => updateExtraction('industry_focus_points', e.target.value)}
-                      rows={3}
-                      className="input-field"
+                      rows={8}
+                      className="input-field text-xs"
                       placeholder="数据跨境传输合规&#10;个人信息保护&#10;反商业贿赂"
                     />
                   </div>
 
                   <div>
                     <Label>红线关键词</Label>
-                    <TagInput
-                      tags={config.extraction.redline_keywords}
+                    <RedlineKeywordsPicker
+                      selected={config.extraction.redline_keywords}
                       onChange={(tags) => updateExtraction('redline_keywords', tags)}
                     />
                   </div>
@@ -776,19 +992,20 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
 
                   <div className="pt-3 border-t border-air-border">
                     <Label>权重分配 (必须总和为 1.0)</Label>
-                    <div className="grid grid-cols-4 gap-4 mt-1">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-1">
                       {([
-                        { key: 'self' as keyof ConfidenceWeights, label: '自身置信度' },
-                        { key: 'consistency' as keyof ConfidenceWeights, label: '一致性' },
-                        { key: 'struct' as keyof ConfidenceWeights, label: '结构化' },
-                        { key: 'conflict' as keyof ConfidenceWeights, label: '冲突检测' },
+                        { key: 'self' as keyof ConfidenceWeights, label: '模型自评' },
+                        { key: 'consistency' as keyof ConfidenceWeights, label: '一致性双采样' },
+                        { key: 'struct' as keyof ConfidenceWeights, label: '结构校验' },
+                        { key: 'conflict' as keyof ConfidenceWeights, label: '冲突标记' },
+                        { key: 'fidelity' as keyof ConfidenceWeights, label: '数值忠实度', highlight: true },
                       ]).map((w) => (
-                        <div key={w.key}>
+                        <div key={w.key} className={w.highlight ? 'p-3 rounded-input bg-primary-soft border border-primary/20' : ''}>
                           <Label htmlFor={w.key}>{w.label}</Label>
                           <input
                             id={w.key}
                             type="number"
-                            value={weights[w.key]}
+                            value={(weights[w.key] ?? 0).toFixed(2)}
                             onChange={(e) => updateConfidenceWeight(w.key, Number(e.target.value))}
                             min={0}
                             max={1}
@@ -796,7 +1013,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                             className="input-field"
                           />
                           <div className="mt-1 text-xs text-gray-400">
-                            {weights[w.key].toFixed(2)}
+                            {(weights[w.key] ?? 0).toFixed(2)}
                           </div>
                         </div>
                       ))}
@@ -804,7 +1021,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                     <div className="mt-2 text-sm">
                       <span
                         className={
-                          weightSum === 1
+                          weightSumOk
                             ? 'text-emerald-600'
                             : 'text-red-500 font-bold'
                         }
@@ -930,69 +1147,6 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                   </div>
                 </div>
               </CollapsibleSection>
-
-              {/* ─── 配置方案管理 ─── */}
-              <div className="card p-5">
-                <h3 className="text-base font-semibold text-gray-900 mb-4">配置方案管理</h3>
-
-                <div className="flex gap-3 mb-4">
-                  <input
-                    type="text"
-                    value={newProfileName}
-                    onChange={(e) => setNewProfileName(e.target.value)}
-                    placeholder="方案名称"
-                    className="input-field max-w-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (newProfileName.trim()) {
-                        handleExportProfile(newProfileName.trim());
-                        setNewProfileName('');
-                      }
-                    }}
-                    disabled={!newProfileName.trim()}
-                    className="btn-secondary"
-                  >
-                    导出当前配置
-                  </button>
-                </div>
-
-                {profiles.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium text-gray-600 mb-2">已保存方案</div>
-                    {profiles.map((p) => (
-                      <div
-                        key={p.name}
-                        className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-input"
-                      >
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{p.name}</div>
-                          {p.description && (
-                            <div className="text-xs text-gray-400">{p.description}</div>
-                          )}
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleImportProfile(p.name)}
-                            className="btn-secondary text-xs py-1 px-3"
-                          >
-                            加载
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteProfile(p.name)}
-                            className="btn-danger text-xs py-1 px-3"
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
 
               {/* Bottom padding for scroll comfort */}
               <div className="h-8" />

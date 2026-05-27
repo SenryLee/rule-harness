@@ -25,9 +25,9 @@
 
 [OUTPUT FORMAT]
 严格 JSON。不输出 markdown 代码块。
-{{
+{
   "rules": [
-    {{
+    {
       "risk_level": "高|中|低",
       "keywords": [string],
       "check_item": string,
@@ -41,6 +41,6 @@
       "direction": "正向|反向",
       "self_confidence": float,
       "uncertainty_points": [string]
-    }}
+    }
   ]
-}}
+}

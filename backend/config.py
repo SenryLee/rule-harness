@@ -59,6 +59,7 @@ class ConfidenceWeights:
     consistency: float
     struct: float
     conflict: float
+    fidelity: float = 0.30  # v1.1: 第五重门权重；默认 0.30
 
 
 @dataclass(frozen=True)
@@ -112,13 +113,14 @@ def _ensure_user_config() -> None:
 
 
 def _parse_model(raw: dict) -> ModelConfig:
+    # 兼容 fallback 未配置时 provider: null 的 YAML 写法
     return ModelConfig(
-        provider=raw["provider"],
-        api_key=raw["api_key"],
-        base_url=raw["base_url"],
-        model=raw["model"],
-        rpm_limit=raw["rpm_limit"],
-        tpm_limit=raw["tpm_limit"],
+        provider=raw.get("provider") or "",
+        api_key=raw.get("api_key") or "",
+        base_url=raw.get("base_url") or "",
+        model=raw.get("model") or "",
+        rpm_limit=int(raw.get("rpm_limit") or 60),
+        tpm_limit=int(raw.get("tpm_limit") or 200_000),
     )
 
 
@@ -145,10 +147,11 @@ def _parse_confidence(raw: dict) -> ConfidenceConfig:
     return ConfidenceConfig(
         threshold_review=raw["threshold_review"],
         weights=ConfidenceWeights(
-            self_=weights_raw["self"],
-            consistency=weights_raw["consistency"],
-            struct=weights_raw["struct"],
-            conflict=weights_raw["conflict"],
+            self_=float(weights_raw.get("self", 0.25)),
+            consistency=float(weights_raw.get("consistency", 0.25)),
+            struct=float(weights_raw.get("struct", 0.15)),
+            conflict=float(weights_raw.get("conflict", 0.05)),
+            fidelity=float(weights_raw.get("fidelity", 0.30)),
         ),
     )
 
@@ -250,6 +253,7 @@ def config_to_dict(cfg: Config) -> dict:
                 "consistency": cfg.confidence.weights.consistency,
                 "struct": cfg.confidence.weights.struct,
                 "conflict": cfg.confidence.weights.conflict,
+                "fidelity": cfg.confidence.weights.fidelity,
             },
         },
         "concurrency": {

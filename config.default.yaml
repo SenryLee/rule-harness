@@ -1,9 +1,9 @@
 models:
   primary:
     provider: deepseek
-    api_key: REMOVED_API_KEY
+    api_key: ""  # 请填入你的 API Key（DeepSeek / OpenAI 等）
     base_url: https://api.deepseek.com/v1
-    model: deepseek-v4-flash
+    model: deepseek-chat
     rpm_limit: 60
     tpm_limit: 200000
   fallback:
@@ -58,11 +58,14 @@ priorities:
 
 confidence:
   threshold_review: 0.7
+  # v1.1：五重门加权（合计 1.00）。fidelity 是新引入的"数值忠实度"，权重最高，
+  # 用于灭掉数值幻觉。
   weights:
-    self: 0.30
-    consistency: 0.40
-    struct: 0.20
-    conflict: 0.10
+    self: 0.25
+    consistency: 0.25
+    struct: 0.15
+    conflict: 0.05
+    fidelity: 0.30
 
 concurrency:
   files: 4

@@ -83,6 +83,13 @@ class RuleCandidate:
     variant_versions: str = ""
     fingerprint: str = ""
     rule_id: str = ""
+    enabled: str = "启用"
+    jurisdiction: str = "中国大陆"
+    # v1.1: 第五重门（忠实度）
+    fidelity_pass: bool = True
+    fidelity_failures: tuple[str, ...] = ()
+    voice_match: bool = True
+    output_target: str = "main"  # main / placeholder / negotiation / discarded
 
 
 _DOCX_EXT = {".docx"}
@@ -158,6 +165,14 @@ def _map_column_by_keywords(header: str, next_best: list[str]) -> str | None:
 
 def _resolve_source_priority(source_tag: str) -> int:
     return _SOURCE_PRIORITY_MAP.get(source_tag, 5)
+
+
+def resolve_source_priority(source_tag: str) -> int:
+    """Public wrapper used by the orchestrator."""
+    return _resolve_source_priority(source_tag)
+
+
+SOURCE_PRIORITY_MAP = _SOURCE_PRIORITY_MAP  # public alias
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -270,6 +285,7 @@ def parse_docx(
     blocks: list[ContentBlock] = []
     comments: list[CommentBlock] = []
     revisions: list[RevisionBlock] = []
+    is_passthrough = False
 
     para_idx = 0
     for paragraph in document.paragraphs:
@@ -292,6 +308,10 @@ def parse_docx(
         ))
         para_idx += 1
 
+    table_blocks, table_is_passthrough = _extract_docx_table_blocks(document)
+    blocks.extend(table_blocks)
+    is_passthrough = table_is_passthrough
+
     _extract_docx_comments(filepath, comments)
     _extract_docx_revisions(document, revisions)
 
@@ -308,8 +328,48 @@ def parse_docx(
         revisions=tuple(revisions),
         is_redline_doc=is_redline,
         is_case_doc=is_case,
-        is_passthrough=False,
+        is_passthrough=is_passthrough,
     )
+
+
+def _extract_docx_table_blocks(document) -> tuple[list[ContentBlock], bool]:
+    blocks: list[ContentBlock] = []
+    is_passthrough = False
+
+    for table_idx, table in enumerate(document.tables):
+        rows: list[list[str]] = []
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                rows.append(cells)
+        if not rows:
+            continue
+
+        headers = rows[0]
+        table_passthrough = _compute_passthrough_score(headers) >= 3
+        is_passthrough = is_passthrough or table_passthrough
+        data_rows = rows[1:] if table_passthrough else rows
+
+        for row_idx, cells in enumerate(data_rows, start=2 if table_passthrough else 1):
+            if table_passthrough:
+                parts = []
+                for col_idx, cell in enumerate(cells):
+                    header = headers[col_idx] if col_idx < len(headers) else f"Col{col_idx + 1}"
+                    if cell:
+                        parts.append(f"{header}: {cell}")
+                text = "; ".join(parts)
+            else:
+                text = " | ".join(cell for cell in cells if cell)
+            if not text.strip():
+                continue
+            blocks.append(ContentBlock(
+                block_id=f"t{table_idx + 1}r{row_idx}",
+                text=text,
+                location=f"table-{table_idx + 1}-row-{row_idx}",
+                block_type="table_row",
+            ))
+
+    return blocks, is_passthrough
 
 
 def _extract_docx_comments(filepath: Path, comments_out: list[CommentBlock]) -> None:
@@ -358,19 +418,50 @@ def _extract_docx_comments(filepath: Path, comments_out: list[CommentBlock]) -> 
 
 
 def _extract_docx_revisions(document, revisions_out: list[RevisionBlock]) -> None:
-    has_revisions = False
-    for paragraph in document.paragraphs:
-        for run in paragraph.runs:
-            element = run._element if hasattr(run, "_element") else None
-            if element is not None:
-                for child in element:
-                    tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                    if tag in ("ins", "del"):
-                        has_revisions = True
-                        break
+    """
+    遍历每个段落，识别 w:ins / w:del 节点。每个含修订的段落输出 1 条 RevisionBlock：
+      - revised_text: 段落当前可见文本（含 ins，去除 del）
+      - original_text: 段落原文（含 del，去除 ins）
+    """
+    w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    for para_idx, paragraph in enumerate(document.paragraphs):
+        ins_segments: list[str] = []
+        del_segments: list[str] = []
+        has_any = False
 
-    if not has_revisions:
-        return
+        for child in paragraph._element.iter():
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if tag == "ins":
+                # 收集 ins 内所有 w:t 文本
+                for t in child.iter(f"{{{w_ns}}}t"):
+                    if t.text:
+                        ins_segments.append(t.text)
+                        has_any = True
+            elif tag == "del":
+                # w:del 里通常是 w:delText
+                for dt in child.iter():
+                    dtag = dt.tag.split("}")[-1] if "}" in dt.tag else dt.tag
+                    if dtag in ("delText", "t") and dt.text:
+                        del_segments.append(dt.text)
+                        has_any = True
+
+        if not has_any:
+            continue
+
+        current_visible = paragraph.text.strip()
+        deleted_text = "".join(del_segments).strip()
+        inserted_text = "".join(ins_segments).strip()
+
+        original = (current_visible.replace(inserted_text, "") if inserted_text else current_visible)
+        original = (original + deleted_text).strip()
+        revised = current_visible
+
+        revisions_out.append(RevisionBlock(
+            rev_id=f"r{para_idx}",
+            original_text=original or current_visible,
+            revised_text=revised,
+            location=f"paragraph-{para_idx}",
+        ))
 
 
 def parse_pdf(

@@ -80,7 +80,7 @@ def merge_rule(new: RuleCandidate, batch_id: str, storage=None) -> MergeDecision
             reason="new fingerprint",
         )
 
-    old_dict = old if isinstance(old, dict) else dict(old)
+    old_dict = _coerce_record_to_dict(old)
 
     if rules_equivalent(new_dict, old_dict):
         return MergeDecision(
@@ -126,6 +126,30 @@ def merge_rule(new: RuleCandidate, batch_id: str, storage=None) -> MergeDecision
         )
 
 
+def _coerce_record_to_dict(record) -> dict:
+    """Convert a SQLite RuleRecord / metadata dataclass / sqlite3.Row to a dict.
+
+    The legacy code assumed ``dict(record)`` would work for anything truthy.
+    For frozen dataclasses (which is what ``storage.find_rule_by_fingerprint``
+    actually returns) that raises ``TypeError`` and the merge silently degrades
+    to "always new" — breaking the increment-merge contract entirely.
+    """
+    if isinstance(record, dict):
+        return record
+    if hasattr(record, "_asdict"):
+        return record._asdict()  # sqlite3.Row
+    try:
+        from dataclasses import asdict, is_dataclass
+        if is_dataclass(record):
+            return asdict(record)
+    except Exception:
+        pass
+    # Last resort: vars() on a plain object.
+    if hasattr(record, "__dict__"):
+        return dict(record.__dict__)
+    return dict(record)
+
+
 def rules_equivalent(a: dict, b: dict) -> bool:
     for field in _EQUIVALENT_FIELDS:
         val_a = _normalize_for_compare(a.get(field))
@@ -135,11 +159,32 @@ def rules_equivalent(a: dict, b: dict) -> bool:
     return True
 
 
+_LIST_SPLIT_RX = None  # initialised lazily
+
+
 def _normalize_for_compare(value: object) -> object:
+    """Order-insensitive, format-tolerant normalisation for diff comparisons.
+
+    Storage flattens list fields (``keywords``, ``contract_types`` etc.) into
+    comma-separated strings; in-memory candidates keep them as ``list``. This
+    helper coerces both to the same shape so a re-extracted rule round-trips
+    as ``skip`` rather than ``new``.
+    """
+    import re as _re
+
+    global _LIST_SPLIT_RX
+    if _LIST_SPLIT_RX is None:
+        _LIST_SPLIT_RX = _re.compile(r"[,，;；、]")
+
     if isinstance(value, (list, tuple)):
-        return tuple(sorted(str(v).strip() for v in value))
+        return tuple(sorted(str(v).strip() for v in value if str(v).strip()))
     if isinstance(value, str):
-        return value.strip()
+        s = value.strip()
+        # Fields like "保密, LPR, 30%" or "采购, 服务" — treat as a list when split.
+        if _LIST_SPLIT_RX.search(s):
+            parts = [p.strip() for p in _LIST_SPLIT_RX.split(s) if p.strip()]
+            return tuple(sorted(parts))
+        return s
     return value
 
 
@@ -190,14 +235,19 @@ def _persist_decisions(
 ) -> None:
     for decision in decisions:
         action = decision.action
-        if action == "new":
-            storage.insert_rule(decision.new_rule, batch_id)
-        elif action == "update":
-            storage.update_rule(decision.rule_id, decision.new_rule)
-        elif action == "add_variant":
-            storage.add_variant(decision.rule_id, decision.new_rule)
-        elif action == "conflict":
-            pass
+        try:
+            if action == "new":
+                storage.insert_rule(decision.new_rule, batch_id)
+            elif action == "update":
+                storage.update_rule(decision.rule_id, decision.new_rule, batch_id)
+            elif action == "add_variant":
+                storage.add_variant(decision.rule_id, decision.new_rule)
+            elif action == "conflict":
+                # 冲突不动主库，只记 history
+                pass
+        except Exception:
+            logger.exception("Failed to apply decision %s for rule %s",
+                             action, decision.rule_id)
 
         storage.record_merge_history(
             batch_id=batch_id,
