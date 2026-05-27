@@ -55,15 +55,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 app = FastAPI(title="规则梳理 Harness", version="1.0.0")
 
-# 仅允许本地前端，避免任意网页通过浏览器读取本机 API。
+# CORS: 本地开发 + 线上部署（Railway / 自定义域名）
+_cors_origins = [
+    "http://localhost:5199",
+    "http://127.0.0.1:5199",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+]
+_extra_origins = os.environ.get("CORS_ORIGINS", "")
+if _extra_origins:
+    _cors_origins.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
+# 生产环境下前端与后端同源，无需额外 CORS；但保留 Railway 预览域名支持
+if os.environ.get("RAILWAY_PUBLIC_DOMAIN"):
+    _cors_origins.append(f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5199",
-        "http://127.0.0.1:5199",
-        "http://localhost:8765",
-        "http://127.0.0.1:8765",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
