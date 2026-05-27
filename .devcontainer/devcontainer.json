@@ -1,0 +1,26 @@
+{
+  "name": "规则梳理 Harness",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+  "forwardPorts": [8765],
+  "portsAttributes": {
+    "8765": {
+      "label": "规则梳理 Harness",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "postCreateCommand": "cd frontend && npm install && npm run build && cd .. && pip install -e .",
+  "postStartCommand": "bash start.sh &",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}

@@ -1,9 +1,9 @@
 models:
   primary:
     provider: deepseek
-    api_key: ""  # 请填入你的 API Key（DeepSeek / OpenAI 等）
+    api_key: "sk-79d3ff66354f432f9354644e51478dcf"
     base_url: https://api.deepseek.com/v1
-    model: deepseek-chat
+    model: deepseek-v4-flash
     rpm_limit: 60
     tpm_limit: 200000
   fallback:
