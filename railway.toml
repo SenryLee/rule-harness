@@ -6,15 +6,13 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Use a dedicated, dependency-free health probe so cold-start IO (yaml read,
-# sqlite mkdir/init, lxml import) never causes a 30s timeout flap. See
-# backend/app.py @app.get("/api/health").
-healthcheckPath = "/api/health"
+# v1.3: 使用 /health（无 /api 前缀）避开任何 mount / 反向代理路径冲突。
+# 该端点同时挂在 /api/health 和 /health，见 backend/app.py。
+healthcheckPath = "/health"
 
-# Python + lxml + pdfplumber + PyMuPDF import chain can take 30-60s on small
-# instances. 180s covers a cold start with margin; restart is still automatic
-# on hard failure.
-healthcheckTimeout = 180
+# Python + lxml + pdfplumber + PyMuPDF import chain 在小实例上可能要 30-60s。
+# 300s 给冷启动充分余量；硬失败仍会自动 restart。
+healthcheckTimeout = 300
 
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

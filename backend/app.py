@@ -115,12 +115,18 @@ def _init_db() -> None:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
+@app.get("/health")
 async def health() -> dict[str, str]:
     """极轻量健康检查端点：不读盘 / 不解析 yaml / 不查 sqlite。
 
-    Railway healthcheck 用这个端点（见 ``railway.toml``）。
-    任何其他端点（含 ``/api/config``）都可能触发 mkdir + 写文件 / yaml 解析，
-    在冷启动期间偶发慢响应，会导致部署被误判为失败。
+    同时挂在 ``/health`` 和 ``/api/health`` 两个路径，是因为：
+      - ``/api/*`` 路径有时会被反向代理 / 静态挂载吃掉（``app.mount("/")``
+        虽然在路由表中靠后，但部分 ASGI middleware 会改路由匹配顺序）
+      - 直接根路径 ``/health`` 永远在 mount("/") 之前被命中
+
+    Railway healthcheck 配置（见 ``railway.toml``）现在指向 ``/health``。
+
+    上线日志关键字：``startup: data dirs ready, sqlite initialised``。
     """
     return {"status": "ok", "service": "rule-harness"}
 

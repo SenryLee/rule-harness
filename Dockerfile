@@ -64,4 +64,9 @@ RUN mkdir -p /app/data/uploads /app/data/exports
 EXPOSE 8000
 
 # Shell form so $PORT gets expanded by the shell at container start.
-CMD python3 -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}
+#
+# v1.3 修订：把 --host 0.0.0.0 改成 ::，让 uvicorn 同时监听 IPv6 和 IPv4 双栈。
+# Railway 的内网 healthcheck 在某些区域会走 IPv6（::1），而只监听 0.0.0.0 时
+# IPv6 探活会拿到 ECONNREFUSED → 表现为 healthcheck 持续 fail 直到 timeout。
+# 用 :: 是 IPv4-mapped IPv6 dual stack，兼容两种。
+CMD python3 -m uvicorn backend.app:app --host :: --port ${PORT:-8000}
