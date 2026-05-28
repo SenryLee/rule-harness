@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { deleteBatch, fetchBatches } from '../api';
 import type { Batch } from '../api';
+import { Icon } from './Ui';
 
 interface TaskPanelProps {
   selectedBatchId: string | null;
   pendingNewTask: boolean;
   onSelectBatch: (batch: Batch | null) => void;
+  onNewTask: () => void;
+  onOpenConfig: () => void;
   refreshKey: number;
 }
 
@@ -41,6 +44,8 @@ export default function TaskPanel({
   selectedBatchId,
   pendingNewTask,
   onSelectBatch,
+  onNewTask,
+  onOpenConfig,
   refreshKey,
 }: TaskPanelProps) {
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -86,21 +91,42 @@ export default function TaskPanel({
   );
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-air-border flex items-center justify-between">
+    <div className="flex h-full flex-col border-r border-[var(--border)] bg-[var(--bg-surface)]">
+      <div className="flex flex-shrink-0 items-center gap-3 border-b border-[var(--border)] px-5 py-4">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-[var(--primary)] to-[#3B82F6] text-white shadow-sm">
+          <Icon name="book" size={18} strokeWidth={2} />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-[15px] font-bold tracking-normal text-[var(--text-primary)]">规则梳理</div>
+          <div className="text-[11px] font-medium text-[var(--text-muted)]">Harness v2.0</div>
+        </div>
+      </div>
+
+      <nav className="flex-shrink-0 px-3 pb-2 pt-3">
+        <button type="button" className="sidebar-nav-item active w-full">
+          <span className="sidebar-nav-indicator" />
+          <Icon name="upload" size={18} />
+          <span className="flex-1">任务工作台</span>
+          <span className="kbd">1</span>
+        </button>
+        <button type="button" onClick={onOpenConfig} className="sidebar-nav-item w-full">
+          <Icon name="settings" size={18} />
+          <span className="flex-1">系统设置</span>
+          <span className="kbd">2</span>
+        </button>
+      </nav>
+
+      <div className="mx-5 h-px flex-shrink-0 bg-[var(--border)]" />
+
+      <div className="flex items-center justify-between px-5 pb-2 pt-4">
         <div>
-          <h2 className="text-sm font-semibold text-gray-900">任务列表</h2>
-          <div className="text-[11px] text-gray-400 mt-0.5">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">历史任务</h2>
+          <div className="mt-1 text-[11px] text-[var(--text-muted)]">
             {batches.length} 个任务{totalRunning > 0 ? ` · ${totalRunning} 个运行中` : ''}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={loadBatches}
-          className="btn-ghost text-xs py-1 px-2"
-          title="刷新任务"
-        >
-          刷新
+        <button type="button" onClick={onNewTask} className="icon-button primary" title="新建任务">
+          <Icon name="plus" size={15} strokeWidth={2.2} />
         </button>
       </div>
 
@@ -108,38 +134,39 @@ export default function TaskPanel({
         <button
           type="button"
           onClick={() => onSelectBatch(null)}
-          className="w-full text-left px-4 py-3 bg-primary-soft border-l-[3px] border-l-primary border-b border-air-border"
+          className="mx-3 mb-2 rounded-md border border-[var(--border-accent)] bg-[var(--primary-soft)] px-3 py-3 text-left shadow-[var(--shadow-xs)]"
         >
           <div className="flex items-center justify-between mb-1">
             <span className="badge-info">新任务</span>
-            <span className="text-[10px] text-primary">未启动</span>
+            <span className="text-[10px] font-medium text-[var(--primary)]">未启动</span>
           </div>
-          <div className="text-xs text-gray-600">上传文件并启动审查</div>
+          <div className="text-xs text-[var(--text-secondary)]">上传文件并启动审查</div>
         </button>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary/20 border-t-primary" />
-            <span className="ml-2 text-xs text-gray-400">加载中...</span>
+            <span className="ml-2 text-xs text-[var(--text-muted)]">加载中...</span>
           </div>
         ) : error ? (
-          <div className="px-4 py-4">
+          <div className="py-4">
             <div className="p-3 bg-red-50 border border-red-200 rounded-card text-red-600 text-xs">
               {error}
             </div>
-            <button type="button" onClick={loadBatches} className="btn-secondary text-xs mt-2 w-full">
-              重试
+            <button type="button" onClick={loadBatches} className="btn-secondary mt-2 w-full text-xs">
+              <Icon name="refresh" size={14} />
+              重试加载
             </button>
           </div>
         ) : batches.length === 0 ? (
-          <div className="px-4 py-10 text-center">
-            <div className="text-sm font-medium text-gray-500">暂无历史任务</div>
-            <p className="text-xs text-gray-400 mt-1">点击顶部“新建任务”开始。</p>
+          <div className="py-10 text-center">
+            <div className="text-sm font-medium text-[var(--text-secondary)]">暂无历史任务</div>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">点击加号开始。</p>
           </div>
         ) : (
-          <div className="divide-y divide-air-border">
+          <div className="space-y-1">
             {batches.map((batch) => {
               const isSelected = selectedBatchId === batch.batch_id;
               const stats = batch.stats || batch.summary || {};
@@ -148,22 +175,22 @@ export default function TaskPanel({
                   key={batch.batch_id}
                   type="button"
                   onClick={() => onSelectBatch(isSelected ? null : batch)}
-                  className={`w-full text-left px-4 py-3 transition-colors hover:bg-air-hover ${
+                  className={`task-item ${
                     isSelected
-                      ? 'bg-primary-soft border-l-[3px] border-l-primary'
-                      : 'border-l-[3px] border-l-transparent'
+                      ? 'selected'
+                      : ''
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-1">
+                  <div className="mb-1 flex items-center justify-between">
                     <StatusBadge status={batch.status} />
-                    <span className="text-[10px] text-gray-400">
+                    <span className="text-[10px] text-[var(--text-muted)]">
                       {formatDate(batch.started_at)}
                     </span>
                   </div>
-                  <div className="text-xs font-mono text-gray-500 truncate mb-1">
+                  <div className="mb-1 truncate font-mono text-xs text-[var(--text-muted)]">
                     {batch.batch_id}
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                  <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)]">
                     {batch.total_files != null && <span>{batch.total_files} 个文件</span>}
                     {stats.total_rules != null && <span>{stats.total_rules} 条规则</span>}
                     {stats.high_risk != null && stats.high_risk > 0 && (
@@ -171,15 +198,16 @@ export default function TaskPanel({
                     )}
                   </div>
                   {isSelected && (
-                    <div className="mt-2 flex justify-end border-t border-air-border pt-2">
+                    <div className="mt-2 flex justify-end border-t border-[var(--border)] pt-2">
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           handleDelete(batch);
                         }}
-                        className="btn-ghost text-[10px] py-1 px-2 text-red-500 hover:text-red-600"
+                        className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-red-500 transition-colors hover:bg-red-50 hover:text-red-600"
                       >
+                        <Icon name="trash" size={12} />
                         删除
                       </button>
                     </div>
@@ -189,6 +217,11 @@ export default function TaskPanel({
             })}
           </div>
         )}
+      </div>
+
+      <div className="flex flex-shrink-0 items-center justify-between border-t border-[var(--border)] px-5 py-3 text-[11px] text-[var(--text-muted)]">
+        <span>命令面板</span>
+        <span className="kbd">⌘K</span>
       </div>
     </div>
   );
