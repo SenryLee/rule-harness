@@ -395,6 +395,27 @@ async def get_batch(batch_id: str):
     return batch
 
 
+@app.delete("/api/batches/{batch_id}")
+async def delete_batch(batch_id: str):
+    batch = _batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if batch.get("status") in {"running", "pending"}:
+        raise HTTPException(status_code=409, detail="Batch is still running")
+
+    _batches.pop(batch_id, None)
+    _batch_rules.pop(batch_id, None)
+    _batch_decisions.pop(batch_id, None)
+    _batch_progress.pop(batch_id, None)
+    _batch_exports.pop(batch_id, None)
+
+    batch_dir = _batch_dir(batch_id)
+    if batch_dir.exists():
+        shutil.rmtree(batch_dir)
+
+    return {"batch_id": batch_id, "deleted": True}
+
+
 @app.get("/api/batches/{batch_id}/progress")
 async def get_batch_progress(batch_id: str):
     if batch_id not in _batches:
