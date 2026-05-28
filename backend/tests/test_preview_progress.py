@@ -122,6 +122,33 @@ def test_pipeline_state_serializes_file_cells():
     assert payload["fidelity_stats"]["discarded"] == 2
 
 
+def test_pipeline_block_progress_updates_incrementally():
+    progress = BatchProgress(total_blocks=3)
+    state = progress.pipeline_progress["P1"]
+    state.files_total = 1
+    state.blocks_total = 3
+    state.files["a.docx"] = PipelineFileState(filename="a.docx", status="running", blocks_total=3)
+
+    progress.mark_pipeline_block_done("P1", "a.docx", rules_emitted=2)
+    progress.mark_pipeline_block_done("P1", "a.docx", rules_emitted=1)
+    progress.mark_pipeline_done("P1", "a.docx", rules_emitted=3)
+
+    payload = progress.to_dict()["pipeline_progress"]["P1"]
+    assert payload["blocks_done"] == 3
+    assert payload["rules_emitted"] == 3
+    assert progress.processed_blocks == 3
+
+
+def test_batch_progress_accumulates_token_usage():
+    progress = BatchProgress()
+
+    progress.add_token_usage({"total_tokens": 12})
+    progress.add_token_usage({"prompt_tokens": 5, "completion_tokens": 7})
+    progress.add_token_usage({})
+
+    assert progress.tokens_used == 24
+
+
 def test_parse_docx_keeps_table_rows_for_extraction(tmp_path):
     import docx
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
@@ -166,10 +167,14 @@ def _extract_retry_after(raw: dict, attempt: int) -> float:
 
 class LLMRouter:
     def __init__(
-        self, primary: LLMProvider, fallback: Optional[LLMProvider] = None
+        self,
+        primary: LLMProvider,
+        fallback: Optional[LLMProvider] = None,
+        usage_callback: Callable[[dict], None] | None = None,
     ):
         self.primary = primary
         self.fallback = fallback
+        self.usage_callback = usage_callback
 
     async def chat(self, **kwargs) -> LLMResponse:
         try:
@@ -198,6 +203,8 @@ class LLMRouter:
                 temperature=t,
                 response_format="json",
             )
+            if self.usage_callback:
+                self.usage_callback(resp.usage)
             try:
                 return json.loads(resp.content)
             except json.JSONDecodeError as e:

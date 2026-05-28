@@ -39,3 +39,4 @@ data/
 # Design tooling
 .gstack/
 .wrangler/
+.playwright-mcp/

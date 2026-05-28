@@ -33,7 +33,15 @@ class P1BodyPipeline:
 
         async def process_one(block):
             async with sem:
-                return await self._extract_block(doc, block, ctx)
+                rules = await self._extract_block(doc, block, ctx)
+                progress = ctx.get("progress")
+                if progress:
+                    progress.mark_pipeline_block_done(
+                        self.pipeline_id,
+                        doc.filename,
+                        len(rules),
+                    )
+                return rules
 
         block_results = await asyncio.gather(
             *[process_one(b) for b in doc.blocks]

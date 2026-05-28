@@ -203,15 +203,45 @@ class BatchProgress:
         file_state.status = "running"
         state.status = "running"
 
+    def mark_pipeline_block_done(self, pipeline_id: str, filename: str, rules_emitted: int = 0) -> None:
+        state = self.pipeline_progress[pipeline_id]
+        file_state = state.files[filename]
+        if file_state.status == "pending":
+            file_state.status = "running"
+            state.status = "running"
+        if file_state.blocks_done < file_state.blocks_total:
+            file_state.blocks_done += 1
+            state.blocks_done += 1
+            if pipeline_id == "P1":
+                self.processed_blocks = min(self.total_blocks, self.processed_blocks + 1)
+        file_state.rules_emitted += rules_emitted
+        state.rules_emitted += rules_emitted
+        self.total_rules += rules_emitted
+
+    def add_token_usage(self, usage: dict | None) -> None:
+        if not usage:
+            return
+        total = usage.get("total_tokens")
+        if total is None:
+            total = int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0)
+        try:
+            self.tokens_used += int(total or 0)
+        except (TypeError, ValueError):
+            return
+
     def mark_pipeline_done(self, pipeline_id: str, filename: str, rules_emitted: int) -> None:
         state = self.pipeline_progress[pipeline_id]
         file_state = state.files[filename]
         file_state.status = "done"
+        remaining_blocks = max(0, file_state.blocks_total - file_state.blocks_done)
         file_state.blocks_done = file_state.blocks_total
+        state.blocks_done += remaining_blocks
+        if pipeline_id == "P1":
+            self.processed_blocks = min(self.total_blocks, self.processed_blocks + remaining_blocks)
+        rules_delta = rules_emitted - file_state.rules_emitted
         file_state.rules_emitted = rules_emitted
         state.files_done += 1
-        state.blocks_done += file_state.blocks_done
-        state.rules_emitted += rules_emitted
+        state.rules_emitted += rules_delta
         if state.files_done >= state.files_total:
             state.status = "done"
 
@@ -363,6 +393,7 @@ async def _run_pipelines(
         ctx = {
             "industry_context": industry_ctx,
             "jurisdiction": "中国大陆",
+            "progress": progress,
         }
 
         async def run_one(pipeline) -> list[RuleCandidate]:
@@ -384,7 +415,6 @@ async def _run_pipelines(
         results = await asyncio.gather(*[run_one(p) for p in applicable])
         for r in results:
             candidates.extend(r)
-        progress.processed_blocks += len(doc.blocks)
         return candidates
 
     bundles = await asyncio.gather(*[extract_doc(d) for d in docs])
@@ -644,6 +674,7 @@ async def run_batch(
     or ``partial`` here.
     """
     router = create_llm_router(cfg)
+    router.usage_callback = progress.add_token_usage
     progress.total_files = len(file_metas)
     progress.status = "running"
 
