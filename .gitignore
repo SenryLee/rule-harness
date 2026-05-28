@@ -20,9 +20,14 @@ Thumbs.db
 # Project data (runtime) — entire data/ dir is local-only
 data/
 
-# PRD documents (internal, not for public repo)
+# PRD / internal review documents (not for public repo)
 *PRD*.md
 *prd*.md
+代码优化大纲.md
+代码审查*.md
+
+# Claude Code local settings
+.claude/
 
 # Environment / secrets
 .env

@@ -96,11 +96,33 @@ _MAX_PAGE_SIZE = 1000
 
 @app.on_event("startup")
 def _init_db() -> None:
-    """Make sure SQLite tables exist on every process start."""
+    """Make sure SQLite tables exist on every process start.
+
+    v1.2 修订（Railway 部署）：先确保 data/ 目录存在，否则 sqlite3.connect 会
+    抛 ``unable to open database file``。这在 Dockerfile 不显式建该目录时尤为重要。
+    """
     try:
+        (PROJECT_ROOT / "data").mkdir(parents=True, exist_ok=True)
+        _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         storage.init_db()
+        logger.info("startup: data dirs ready, sqlite initialised")
     except Exception:
         logger.exception("storage.init_db failed; persistence will be degraded")
+
+
+# ---------------------------------------------------------------------------
+# Health check (Railway / Docker / k8s liveness)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/health")
+async def health() -> dict[str, str]:
+    """极轻量健康检查端点：不读盘 / 不解析 yaml / 不查 sqlite。
+
+    Railway healthcheck 用这个端点（见 ``railway.toml``）。
+    任何其他端点（含 ``/api/config``）都可能触发 mkdir + 写文件 / yaml 解析，
+    在冷启动期间偶发慢响应，会导致部署被误判为失败。
+    """
+    return {"status": "ok", "service": "rule-harness"}
 
 
 # ---------------------------------------------------------------------------

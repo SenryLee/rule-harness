@@ -1,9 +1,20 @@
 [build]
+# Use the Dockerfile at the repo root (replaces the previous Nixpacks build,
+# which failed with "cd frontend: No such file or directory" because Nixpacks
+# resets CWD between phases).
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/api/config"
-healthcheckTimeout = 30
+# Use a dedicated, dependency-free health probe so cold-start IO (yaml read,
+# sqlite mkdir/init, lxml import) never causes a 30s timeout flap. See
+# backend/app.py @app.get("/api/health").
+healthcheckPath = "/api/health"
+
+# Python + lxml + pdfplumber + PyMuPDF import chain can take 30-60s on small
+# instances. 180s covers a cold start with margin; restart is still automatic
+# on hard failure.
+healthcheckTimeout = 180
+
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

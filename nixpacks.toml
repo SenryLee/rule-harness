@@ -1,3 +1,6 @@
+# Nixpacks 备用构建方案（Railway 现在走 DOCKERFILE builder，本文件仅作回退）。
+# 如需切回 Nixpacks，把 railway.toml 的 builder 改为 "NIXPACKS"。
+# healthcheckPath 仍保持 "/api/health"。
 [phases.setup]
 nixPkgs = ["nodejs_20", "python311"]
 
@@ -9,7 +12,8 @@ cmds = [
 
 [phases.build]
 cmds = [
-    "cd frontend && npm run build && cd .."
+    "cd frontend && npm run build && cd ..",
+    "mkdir -p data/uploads data/exports"
 ]
 
 [start]

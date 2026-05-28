@@ -2,6 +2,7 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 data/
+samples/
 .git/
 .github/
 .devcontainer/
@@ -15,3 +16,10 @@ __pycache__
 .env.local
 .DS_Store
 .gstack/
+# Documentation - keep image lean
+*.md
+!README.md
+# Backup / OS clutter
+*.bak
+*.swp
+*~
