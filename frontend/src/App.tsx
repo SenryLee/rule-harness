@@ -3,9 +3,11 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import TaskPanel from './components/TaskPanel';
 import WorkbenchView from './components/WorkbenchView';
 import ResultsView from './components/ResultsView';
-import ConfigDrawer from './components/ConfigDrawer';
+import SettingsView from './components/SettingsView';
 import { Icon } from './components/Ui';
 import type { Batch } from './api';
+
+type AppView = 'workbench' | 'settings';
 
 function isResultsStatus(status?: string): boolean {
   return status === 'success' || status === 'completed' || status === 'partial' || status === 'merged';
@@ -13,7 +15,7 @@ function isResultsStatus(status?: string): boolean {
 
 export default function App() {
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
-  const [showConfig, setShowConfig] = useState(false);
+  const [currentView, setCurrentView] = useState<AppView>('workbench');
   const [refreshKey, setRefreshKey] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [isResizing, setIsResizing] = useState(false);
@@ -25,16 +27,12 @@ export default function App() {
 
   const handleNewTask = useCallback(() => {
     setSelectedBatch(null);
+    setCurrentView('workbench');
   }, []);
 
-  const handleConfigSaved = useCallback(() => {
-    setShowConfig(false);
-    handleRefresh();
-  }, [handleRefresh]);
-
   const view = useMemo(
-    () => (isResultsStatus(selectedBatch?.status) ? 'results' : 'workbench'),
-    [selectedBatch?.status],
+    () => (currentView === 'settings' ? 'settings' : isResultsStatus(selectedBatch?.status) ? 'results' : 'workbench'),
+    [currentView, selectedBatch?.status],
   );
 
   const handleMouseDown = useCallback(
@@ -90,11 +88,15 @@ export default function App() {
         style={{ width: sidebarWidth, transition: isResizing ? 'none' : 'width var(--dur-normal) var(--ease-out)' }}
       >
         <TaskPanel
+          currentView={currentView}
           selectedBatchId={selectedBatch?.batch_id || null}
           pendingNewTask={!selectedBatch}
-          onSelectBatch={setSelectedBatch}
+          onSelectBatch={(batch) => {
+            setSelectedBatch(batch);
+            setCurrentView('workbench');
+          }}
           onNewTask={handleNewTask}
-          onOpenConfig={() => setShowConfig(true)}
+          onOpenConfig={() => setCurrentView('settings')}
           refreshKey={refreshKey}
         />
       </aside>
@@ -107,7 +109,9 @@ export default function App() {
 
       <main className="flex-1 overflow-y-auto">
         <div className="min-h-full px-5 py-6 md:px-8">
-          {view === 'results' && selectedBatch ? (
+          {view === 'settings' ? (
+            <SettingsView />
+          ) : view === 'results' && selectedBatch ? (
             <ResultsView batchId={selectedBatch.batch_id} refreshKey={refreshKey} />
           ) : (
             <WorkbenchView
@@ -119,16 +123,12 @@ export default function App() {
         </div>
       </main>
 
-      {showConfig && (
-        <ConfigDrawer onClose={() => setShowConfig(false)} onSaved={handleConfigSaved} />
-      )}
-
       {commandOpen && (
         <CommandPalette
           onClose={() => setCommandOpen(false)}
           onNewTask={handleNewTask}
           onOpenConfig={() => {
-            setShowConfig(true);
+            setCurrentView('settings');
             setCommandOpen(false);
           }}
         />

@@ -4,6 +4,7 @@ import type { Batch } from '../api';
 import { Icon } from './Ui';
 
 interface TaskPanelProps {
+  currentView: 'workbench' | 'settings';
   selectedBatchId: string | null;
   pendingNewTask: boolean;
   onSelectBatch: (batch: Batch | null) => void;
@@ -41,6 +42,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function TaskPanel({
+  currentView,
   selectedBatchId,
   pendingNewTask,
   onSelectBatch,
@@ -103,13 +105,14 @@ export default function TaskPanel({
       </div>
 
       <nav className="flex-shrink-0 px-3 pb-2 pt-3">
-        <button type="button" className="sidebar-nav-item active w-full">
-          <span className="sidebar-nav-indicator" />
+        <button type="button" onClick={onNewTask} className={`sidebar-nav-item w-full ${currentView === 'workbench' ? 'active' : ''}`}>
+          {currentView === 'workbench' && <span className="sidebar-nav-indicator" />}
           <Icon name="upload" size={18} />
           <span className="flex-1">任务工作台</span>
           <span className="kbd">1</span>
         </button>
-        <button type="button" onClick={onOpenConfig} className="sidebar-nav-item w-full">
+        <button type="button" onClick={onOpenConfig} className={`sidebar-nav-item w-full ${currentView === 'settings' ? 'active' : ''}`}>
+          {currentView === 'settings' && <span className="sidebar-nav-indicator" />}
           <Icon name="settings" size={18} />
           <span className="flex-1">系统设置</span>
           <span className="kbd">2</span>
