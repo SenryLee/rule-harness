@@ -515,6 +515,18 @@ async def export_negotiation(batch_id: str):
                          download_name=f"{batch_id}_negotiation.csv")
 
 
+@app.get("/api/batches/{batch_id}/exports/out-of-scope-csv")
+async def export_out_of_scope(batch_id: str):
+    return _serve_export(batch_id, "out_of_scope_csv", media_type="text/csv",
+                         download_name=f"{batch_id}_out_of_scope.csv")
+
+
+@app.get("/api/batches/{batch_id}/exports/template-strategy")
+async def export_template_strategy(batch_id: str):
+    return _serve_export(batch_id, "template_strategy_md", media_type="text/markdown",
+                         download_name=f"{batch_id}_template_strategy.md")
+
+
 def _serve_export(batch_id: str, key: str, media_type: str, download_name: str):
     if batch_id not in _batches:
         raise HTTPException(status_code=404, detail="Batch not found")
@@ -531,6 +543,8 @@ def _serve_export(batch_id: str, key: str, media_type: str, download_name: str):
             "placeholders_csv": "placeholders.csv",
             "discarded_csv": "discarded.csv",
             "negotiation_csv": "negotiation.csv",
+            "out_of_scope_csv": "out_of_scope.csv",
+            "template_strategy_md": "template_strategy.md",
         }.get(key)
         if not fname:
             raise HTTPException(status_code=404, detail=f"Unknown export key: {key}")

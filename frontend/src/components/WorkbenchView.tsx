@@ -46,6 +46,12 @@ const CONTRACT_TYPES = [
 
 const PARTY_OPTIONS = ['通用', '甲方', '乙方', '发包人', '承包人', '买方', '卖方', '出租人', '承租人'];
 
+const TASK_MODES = [
+  { value: 'full_library', label: '全量规则沉淀' },
+  { value: 'template_focused', label: '围绕模板抽取' },
+  { value: 'template_strategy', label: '我方模板策略' },
+] as const;
+
 interface UploadedFile {
   id: string;
   file: File;
@@ -91,6 +97,8 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
   const [config, setConfig] = useState<Config | null>(null);
   const [configDirty, setConfigDirty] = useState(false);
   const [batchConfigOpen, setBatchConfigOpen] = useState(false);
+  const [taskMode, setTaskMode] = useState<CreateBatchMeta['task_mode']>('full_library');
+  const [scopeDescription, setScopeDescription] = useState('');
   const idCounter = useRef(0);
 
   useEffect(() => {
@@ -240,6 +248,8 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
         contract_types: item.meta.contract_types || [],
         is_redline: item.meta.source_tag === '公司红线',
         is_case: item.meta.source_tag === '案例',
+        task_mode: taskMode,
+        scope_description: scopeDescription.trim(),
       }));
       const created = await createBatch(files.map((item) => item.file), meta);
       setCurrentBatchId(created.batch_id);
@@ -251,7 +261,7 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
     } finally {
       setSubmitting(false);
     }
-  }, [canStart, config, configDirty, files, onBatchUpdated, onRefresh]);
+  }, [canStart, config, configDirty, files, onBatchUpdated, onRefresh, scopeDescription, taskMode]);
 
   const updateExtraction = useCallback((field: 'industry_preset' | 'granularity' | 'regulation_depth', value: string | null) => {
     setConfig((prev) =>
@@ -308,6 +318,9 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
               <label htmlFor="workbench-upload" className="cursor-pointer">
                 <div className="text-base font-semibold text-gray-700">拖拽文件到这里</div>
                 <div className="text-sm text-gray-400 mt-1">或点击选择文件，支持 Word / PDF / Excel / TXT</div>
+                <div className="mt-1 text-xs text-amber-600">
+                  PDF 稳定支持可复制文本；扫描件需开启 OCR；复杂图片型 PDF 暂不保证。
+                </div>
               </label>
             </div>
 
@@ -415,13 +428,27 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
               <div>
                 <div className="text-sm font-semibold text-gray-900">批次配置</div>
                 <div className="text-xs text-gray-400 mt-0.5">
-                  行业预设: {config?.extraction.industry_preset || '通用'} ｜ 颗粒度: {config?.extraction.granularity || '-'} ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
+                  模式: {TASK_MODES.find((mode) => mode.value === taskMode)?.label || '全量规则沉淀'} ｜ 行业预设: {config?.extraction.industry_preset || '通用'} ｜ 颗粒度: {config?.extraction.granularity || '-'} ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
                 </div>
               </div>
               <span className="text-sm text-primary">{batchConfigOpen ? '收起' : '展开'}</span>
             </button>
             {batchConfigOpen && config && (
               <div className="px-5 pb-4 border-t border-air-border grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="text-xs text-gray-500">
+                  任务模式
+                  <select
+                    value={taskMode}
+                    onChange={(event) => setTaskMode(event.target.value as CreateBatchMeta['task_mode'])}
+                    className="select-field text-xs"
+                  >
+                    {TASK_MODES.map((mode) => (
+                      <option key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="text-xs text-gray-500">
                   行业预设
                   <select
@@ -458,6 +485,15 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
                     <option value="full">完整条款</option>
                     <option value="limited">摘要要点</option>
                   </select>
+                </label>
+                <label className="text-xs text-gray-500 md:col-span-3">
+                  范围说明
+                  <textarea
+                    value={scopeDescription}
+                    onChange={(event) => setScopeDescription(event.target.value)}
+                    className="select-field min-h-[72px] resize-y text-xs"
+                    placeholder="例如：只抽与本次采购模板付款、交付、验收、违约责任相关的规则"
+                  />
                 </label>
               </div>
             )}

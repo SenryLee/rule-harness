@@ -133,6 +133,7 @@ class P1BodyPipeline:
                 "theme_keys": theme_keys_text,
                 "industry_context": industry_text,
                 "coverage_policy": _coverage_policy(self.cfg),
+                "task_guidance": _task_guidance(ctx),
             },
             user_vars={
                 "filename": doc.filename,
@@ -142,6 +143,9 @@ class P1BodyPipeline:
                 "jurisdiction": jurisdiction,
                 "location": block.location,
                 "block_text": block.text,
+                "task_mode_label": str(ctx.get("task_mode_label", "全量规则沉淀")),
+                "our_party": str(ctx.get("our_party", "通用")),
+                "scope_description": str(ctx.get("scope_description", "")) or "无",
             },
         )
 
@@ -173,3 +177,24 @@ def _coverage_policy(cfg: Config) -> str:
         "- 对案例/法律分析文本，输出应围绕'以后审合同时要检查什么、避免什么、补什么证据'，不要只做案情总结。\n"
         "- 没有具体数值时不要编造阈值，threshold_type 使用 无/列表/参照，并在 notes 说明原文依据。"
     )
+
+
+def _task_guidance(ctx: dict) -> str:
+    mode = str(ctx.get("task_mode") or "full_library")
+    our_party = str(ctx.get("our_party") or "通用")
+    scope = str(ctx.get("scope_description") or "").strip()
+    if mode == "template_focused":
+        return (
+            "当前任务是围绕本次模板抽取规则。优先输出与本次模板的交易结构、条款主题、义务主体、风险点直接相关的规则；"
+            "与模板无关的通用制度性口径可以降低 self_confidence，并在 uncertainty_points 说明相关性不足。"
+            f"用户补充范围：{scope or '无'}。"
+        )
+    if mode == "template_strategy":
+        return (
+            f"当前任务是从对方模板/资料中提炼对我方（{our_party}）有利或必须争取的规则。"
+            "输出时优先识别：对我方有利条款、对我方不利需改写条款、必须补充条款、可谈判底线。"
+            "requirement 应写成我方审查/起草时可采用的口径，不要直接照抄对方不利表述；"
+            "notes 说明该规则对我方的价值、适用边界或谈判提示。"
+            f"用户补充范围：{scope or '无'}。"
+        )
+    return "当前任务是全量规则沉淀，按来源文本完整抽取可复用审查规则。"

@@ -187,6 +187,10 @@ export interface RuleItem {
   fidelity_failures?: string[];
   voice_match?: boolean;
   output_target?: 'main' | 'placeholder' | 'discarded' | 'negotiation' | string;
+  task_mode?: string;
+  scope_match?: string;
+  scope_reason?: string;
+  template_anchor?: string;
 }
 
 export interface RuleListResponse {
@@ -345,6 +349,8 @@ export interface CreateBatchMeta {
   is_redline?: boolean;
   is_case?: boolean;
   jurisdiction?: string;
+  task_mode?: 'full_library' | 'template_focused' | 'template_strategy';
+  scope_description?: string;
 }
 
 export interface PreviewClassifyResponse {
@@ -416,6 +422,8 @@ export type ExportKind =
   | 'placeholders-csv'
   | 'discarded-csv'
   | 'negotiation-csv'
+  | 'out-of-scope-csv'
+  | 'template-strategy'
   | 'summary';
 
 export function downloadExport(id: string, kind: ExportKind): void {

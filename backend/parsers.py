@@ -48,6 +48,7 @@ class ParsedDocument:
     is_redline_doc: bool
     is_case_doc: bool
     is_passthrough: bool
+    parse_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,10 @@ class RuleCandidate:
     fidelity_failures: tuple[str, ...] = ()
     voice_match: bool = True
     output_target: str = "main"  # main / placeholder / negotiation / discarded
+    task_mode: str = "full_library"
+    scope_match: str = "in_scope"
+    scope_reason: str = ""
+    template_anchor: str = ""
 
 
 _DOCX_EXT = {".docx"}
@@ -200,6 +205,9 @@ def parse_file(
     is_scanned: bool = False,
     is_redline: bool = False,
     is_case: bool = False,
+    ocr_enabled: bool = False,
+    ocr_engine: str = "paddleocr",
+    ocr_language: str = "ch+en",
 ) -> ParsedDocument:
     suffix = filepath.suffix.lower()
     sha256 = compute_sha256(filepath)
@@ -227,7 +235,9 @@ def parse_file(
                           is_scanned, is_redline, is_case, sha256, priority)
     elif suffix in _PDF_EXT:
         return parse_pdf(filepath, source_tag, contract_types, industry_context,
-                         is_scanned, is_redline, is_case, sha256, priority)
+                         is_scanned, is_redline, is_case, sha256, priority,
+                         ocr_enabled=ocr_enabled, ocr_engine=ocr_engine,
+                         ocr_language=ocr_language)
     elif suffix in _XLSX_EXT:
         return parse_excel(filepath, source_tag, contract_types, industry_context,
                            is_scanned, is_redline, is_case, sha256, priority)
@@ -474,6 +484,9 @@ def parse_pdf(
     is_case: bool = False,
     sha256: str | None = None,
     priority: int | None = None,
+    ocr_enabled: bool = False,
+    ocr_engine: str = "paddleocr",
+    ocr_language: str = "ch+en",
 ) -> ParsedDocument:
     if sha256 is None:
         sha256 = compute_sha256(filepath)
@@ -482,6 +495,13 @@ def parse_pdf(
 
     blocks = _extract_pdf_text(filepath, is_scanned)
     scanned = is_scanned or _detect_scanned(blocks)
+    warnings: list[str] = []
+    if scanned and not blocks and ocr_enabled:
+        blocks, ocr_warning = _ocr_pdf_pages(filepath, ocr_engine, ocr_language)
+        if ocr_warning:
+            warnings.append(ocr_warning)
+    elif scanned and not blocks:
+        warnings.append("pdf_scanned_without_ocr")
 
     return ParsedDocument(
         sha256=sha256,
@@ -497,6 +517,7 @@ def parse_pdf(
         is_redline_doc=is_redline,
         is_case_doc=is_case,
         is_passthrough=False,
+        parse_warnings=tuple(warnings),
     )
 
 
@@ -568,6 +589,126 @@ def _detect_scanned(blocks: tuple[ContentBlock, ...]) -> bool:
         return True
     avg_chars = total_chars / total_blocks
     return avg_chars < 10 and total_chars < 100
+
+
+def _ocr_pdf_pages(
+    filepath: Path,
+    engine: str,
+    language: str,
+) -> tuple[tuple[ContentBlock, ...], str | None]:
+    """Best-effort OCR for ordinary scanned PDFs.
+
+    The implementation intentionally treats OCR engines as optional runtime
+    dependencies. If PaddleOCR or Tesseract is unavailable, parsing continues
+    with a warning instead of crashing the batch.
+    """
+    blocks: list[ContentBlock] = []
+    warning: str | None = None
+
+    try:
+        import fitz
+    except Exception:
+        return (), "pdf_ocr_unavailable:pymupdf_missing"
+
+    try:
+        doc = fitz.open(str(filepath))
+    except Exception:
+        return (), "pdf_ocr_unavailable:open_failed"
+
+    try:
+        for page_num in range(len(doc)):
+            text, page_warning = _ocr_pdf_page(doc[page_num], engine, language)
+            if page_warning and warning is None:
+                warning = page_warning
+            if not text.strip():
+                continue
+            for block in _chunk_by_double_newline(text, f"p{page_num + 1}-ocr", len(blocks)):
+                blocks.append(block)
+    finally:
+        doc.close()
+
+    if not blocks and warning is None:
+        warning = "pdf_ocr_no_text"
+    return tuple(blocks), warning
+
+
+def _ocr_pdf_page(page, engine: str, language: str) -> tuple[str, str | None]:
+    try:
+        import tempfile
+    except Exception:
+        return "", "pdf_ocr_unavailable:tempfile_missing"
+
+    matrix = getattr(page, "get_pixmap")
+    try:
+        pix = matrix(dpi=220, alpha=False)
+    except TypeError:
+        pix = matrix()
+
+    suffix = ".png"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        pix.save(tmp.name)
+        normalized_engine = (engine or "").lower()
+        if normalized_engine == "paddleocr":
+            text, warning = _ocr_image_with_paddle(tmp.name, language)
+            if text or warning != "pdf_ocr_unavailable:paddleocr_missing":
+                return text, warning
+        return _ocr_image_with_tesseract(tmp.name, language)
+
+
+def _ocr_image_with_paddle(image_path: str, language: str) -> tuple[str, str | None]:
+    try:
+        from paddleocr import PaddleOCR
+    except Exception:
+        return "", "pdf_ocr_unavailable:paddleocr_missing"
+
+    lang = "ch" if "ch" in (language or "").lower() else "en"
+    try:
+        ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+        result = ocr.ocr(image_path, cls=True)
+    except Exception as exc:
+        return "", f"pdf_ocr_failed:paddleocr:{exc}"
+
+    lines: list[str] = []
+    for page_result in result or []:
+        for item in page_result or []:
+            try:
+                text = item[1][0]
+            except (IndexError, TypeError):
+                continue
+            if text:
+                lines.append(str(text))
+    return "\n".join(lines), None
+
+
+def _ocr_image_with_tesseract(image_path: str, language: str) -> tuple[str, str | None]:
+    import shutil
+    import subprocess
+
+    if shutil.which("tesseract") is None:
+        return "", "pdf_ocr_unavailable:tesseract_missing"
+
+    lang = _tesseract_lang(language)
+    cmd = ["tesseract", image_path, "stdout"]
+    if lang:
+        cmd.extend(["-l", lang])
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return "", f"pdf_ocr_failed:tesseract:{exc}"
+    if proc.returncode != 0:
+        return "", f"pdf_ocr_failed:tesseract:{proc.stderr.strip()[:120]}"
+    return proc.stdout.strip(), None
+
+
+def _tesseract_lang(language: str) -> str:
+    raw = (language or "").lower()
+    if raw in {"ch+en", "zh+en", "chi_sim+eng"}:
+        return "chi_sim+eng"
+    if raw in {"ch", "zh", "chi_sim"}:
+        return "chi_sim"
+    if raw in {"en", "eng"}:
+        return "eng"
+    return raw.replace("ch", "chi_sim").replace("en", "eng")
 
 
 def parse_excel(

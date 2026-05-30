@@ -23,6 +23,7 @@ def _partition_by_target(rules: list[RuleCandidate]) -> dict[str, list[RuleCandi
       - ``placeholder`` 占位规则（LLM 自承无内容 / 低置信 / 原文含占位符）
       - ``negotiation`` 谈判阶梯规则（仅 P4 在红线文件上产出）
       - ``discarded`` 忠实度校验严重失败，转写到审计文件
+      - ``out_of_scope`` 与本次模板/任务范围不匹配，保留审计不进主表
 
     未知 target 默认按 main 处理（向后兼容）。
     """
@@ -31,6 +32,7 @@ def _partition_by_target(rules: list[RuleCandidate]) -> dict[str, list[RuleCandi
         "placeholder": [],
         "negotiation": [],
         "discarded": [],
+        "out_of_scope": [],
     }
     for rule in rules:
         target = getattr(rule, "output_target", "main") or "main"
@@ -49,6 +51,7 @@ _METADATA_CSV_HEADERS = [
     "uncertainty_points",
     # v1.1
     "忠实度通过", "忠实度失败项", "语态匹配", "输出目标",
+    "任务模式", "范围匹配", "范围理由", "模板锚点",
 ]
 
 
@@ -156,6 +159,84 @@ def export_negotiation_csv(
             ])
 
 
+def export_out_of_scope_csv(
+    rules: list[RuleCandidate], output_path: Path
+) -> None:
+    """候选规则与本次模板/用户范围不匹配时，单独导出供复核。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "规则项id", "风险程度", "检查项", "审查要求", "来源文件",
+            "范围理由", "模板锚点", "原文片段",
+        ])
+        for rule in rules:
+            writer.writerow([
+                getattr(rule, "rule_id", ""),
+                rule.risk_level,
+                rule.check_item,
+                rule.requirement,
+                rule.source_filename,
+                getattr(rule, "scope_reason", ""),
+                getattr(rule, "template_anchor", ""),
+                rule.source_excerpt[:300],
+            ])
+
+
+def export_template_strategy_md(
+    rules: list[RuleCandidate], output_path: Path
+) -> None:
+    """生成第一版“我方有利模板骨架”，不直接替代人工起草合同。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    in_scope = [r for r in rules if getattr(r, "scope_match", "in_scope") == "in_scope"]
+    main_rules = [r for r in in_scope if getattr(r, "output_target", "main") == "main"]
+    high = [r for r in main_rules if r.risk_level == "高"]
+    medium = [r for r in main_rules if r.risk_level == "中"]
+
+    lines = [
+        "# 我方有利规则与模板骨架",
+        "",
+        "> 本文件由规则抽取结果自动生成，用于起草前的条款骨架和谈判清单；不等同于完整合同文本。",
+        "",
+        "## 必备/优先条款",
+        "",
+    ]
+    if high:
+        for rule in high[:80]:
+            lines.extend(_strategy_rule_lines(rule))
+    else:
+        lines.append("- 暂无高风险必备条款。")
+
+    lines.extend(["", "## 可谈判/需补强条款", ""])
+    if medium:
+        for rule in medium[:80]:
+            lines.extend(_strategy_rule_lines(rule))
+    else:
+        lines.append("- 暂无中风险补强条款。")
+
+    lines.extend(["", "## 低风险/格式优化", ""])
+    low = [r for r in main_rules if r.risk_level == "低"]
+    if low:
+        for rule in low[:50]:
+            lines.extend(_strategy_rule_lines(rule))
+    else:
+        lines.append("- 暂无低风险格式优化条款。")
+
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _strategy_rule_lines(rule: RuleCandidate) -> list[str]:
+    anchor = getattr(rule, "template_anchor", "")
+    source = f"{rule.source_filename} {rule.source_location}".strip()
+    return [
+        f"- **{rule.check_item}**",
+        f"  - 建议口径：{rule.requirement}",
+        f"  - 依据/边界：{rule.notes or rule.source_excerpt[:120]}",
+        f"  - 来源：{source}",
+        f"  - 模板关联：{anchor or getattr(rule, 'scope_reason', '') or '未记录'}",
+    ]
+
+
 def export_metadata_csv(
     rules: list[RuleCandidate], output_path: Path
 ) -> None:
@@ -208,6 +289,10 @@ def export_metadata_csv(
                 ", ".join(getattr(rule, "fidelity_failures", ()) or ()),
                 int(getattr(rule, "voice_match", True)),
                 getattr(rule, "output_target", "main"),
+                getattr(rule, "task_mode", "full_library"),
+                getattr(rule, "scope_match", "in_scope"),
+                getattr(rule, "scope_reason", ""),
+                getattr(rule, "template_anchor", ""),
             ])
 
 

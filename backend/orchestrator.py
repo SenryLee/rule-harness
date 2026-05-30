@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
@@ -37,8 +38,10 @@ from .exporter import (
     export_main_csv,
     export_metadata_csv,
     export_negotiation_csv,
+    export_out_of_scope_csv,
     export_placeholders_csv,
     export_summary_html,
+    export_template_strategy_md,
 )
 from .harness import build_rule_id, compute_fingerprint
 from .llm import LLMRouter, create_llm_router
@@ -328,6 +331,9 @@ async def _parse_one(file_path: Path, meta: dict) -> ParsedDocument:
             contract_types=list(meta.get("contract_types", []) or []),
             industry_context=meta.get("industry_context"),
             is_scanned=bool(meta.get("is_scanned", False)),
+            ocr_enabled=bool(meta.get("ocr_enabled", False)),
+            ocr_engine=str(meta.get("ocr_engine", "paddleocr")),
+            ocr_language=str(meta.get("ocr_language", "ch+en")),
             # 严格 AND：用户显式勾选 + tag 也对得上
             is_redline=user_is_redline and src_tag in _REDLINE_SOURCE_TAGS,
             is_case=user_is_case and src_tag in _CASE_SOURCE_TAGS,
@@ -364,9 +370,139 @@ async def _parse_all(file_metas: list[dict], batch_dir: Path,
                 )
             progress.processed_files += 1
             progress.total_blocks += len(doc.blocks)
+            for warning in getattr(doc, "parse_warnings", ()) or ():
+                progress.errors.append(f"parse_warning:{doc.filename}:{warning}")
             return doc
 
     return await asyncio.gather(*[gated(m) for m in file_metas])
+
+
+# ---------------------------------------------------------------------------
+# Batch task scope
+# ---------------------------------------------------------------------------
+
+_TASK_MODE_LABELS = {
+    "full_library": "全量规则沉淀",
+    "template_focused": "围绕模板抽取",
+    "template_strategy": "对我方有利模板生成",
+}
+
+_GENERIC_SCOPE_TERMS = {
+    "合同", "条款", "双方", "甲方", "乙方", "本合同", "协议", "约定", "应当", "可以",
+    "不得", "需要", "相关", "业务", "模板", "内容", "进行", "提供", "包括", "或者",
+}
+
+
+@dataclass(frozen=True)
+class TaskScope:
+    mode: str
+    mode_label: str
+    scope_description: str
+    our_party: str
+    template_text: str
+    template_terms: tuple[str, ...]
+
+
+def _build_task_scope(file_metas: list[dict], docs: list[ParsedDocument]) -> TaskScope:
+    first = file_metas[0] if file_metas else {}
+    mode = str(first.get("task_mode") or "full_library")
+    if mode not in _TASK_MODE_LABELS:
+        mode = "full_library"
+
+    scope_description = str(first.get("scope_description") or "").strip()
+    our_party = next(
+        (
+            str(meta.get("our_party"))
+            for meta in file_metas
+            if meta.get("our_party") and str(meta.get("our_party")) != "通用"
+        ),
+        str(first.get("our_party") or "通用"),
+    )
+
+    template_text = "\n".join(
+        block.text
+        for doc in docs
+        if doc.source_tag == "合同模板"
+        for block in doc.blocks
+    )
+    terms = _extract_scope_terms("\n".join([template_text, scope_description]))
+    return TaskScope(
+        mode=mode,
+        mode_label=_TASK_MODE_LABELS[mode],
+        scope_description=scope_description,
+        our_party=our_party,
+        template_text=template_text,
+        template_terms=tuple(terms),
+    )
+
+
+def _extract_scope_terms(text: str) -> list[str]:
+    terms: set[str] = set()
+    for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9_%]{2,24}", text or ""):
+        token = token.strip()
+        if not token or token in _GENERIC_SCOPE_TERMS:
+            continue
+        if len(token) <= 1:
+            continue
+        terms.add(token)
+    return sorted(terms, key=lambda x: (-len(x), x))[:300]
+
+
+def _apply_task_scope(candidates: list[RuleCandidate], scope: TaskScope) -> list[RuleCandidate]:
+    if not candidates:
+        return []
+
+    out: list[RuleCandidate] = []
+    for rule in candidates:
+        match, reason, anchor = _scope_match(rule, scope)
+        target = rule.output_target
+        if scope.mode in {"template_focused", "template_strategy"} and match == "out_of_scope" and target == "main":
+            target = "out_of_scope"
+        out.append(replace(
+            rule,
+            task_mode=scope.mode,
+            scope_match=match,
+            scope_reason=reason,
+            template_anchor=anchor,
+            output_target=target,
+        ))
+    return out
+
+
+def _scope_match(rule: RuleCandidate, scope: TaskScope) -> tuple[str, str, str]:
+    if scope.mode == "full_library":
+        return "in_scope", "全量规则沉淀模式，不做模板相关性过滤", ""
+
+    if rule.source_tag == "合同模板":
+        return "in_scope", "规则直接来自本次合同模板", rule.source_filename
+
+    searchable = "\n".join([
+        rule.check_item,
+        rule.requirement,
+        rule.notes,
+        " ".join(rule.keywords),
+        rule.theme_key.replace(".", " "),
+    ])
+    keyword_hits = [
+        kw for kw in rule.keywords
+        if kw and len(kw) >= 2 and kw in scope.template_text
+    ]
+    term_hits = [
+        term for term in scope.template_terms
+        if term and term in searchable
+    ][:5]
+
+    hits = keyword_hits[:5] or term_hits
+    if hits:
+        return "in_scope", f"命中模板相关词: {'、'.join(hits)}", "、".join(hits)
+
+    if scope.scope_description:
+        desc_terms = _extract_scope_terms(scope.scope_description)
+        desc_hits = [term for term in desc_terms if term in searchable][:5]
+        if desc_hits:
+            return "in_scope", f"命中用户范围说明: {'、'.join(desc_hits)}", "、".join(desc_hits)
+
+    return "out_of_scope", "未命中本次模板文本或用户范围说明", ""
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +514,7 @@ async def _run_pipelines(
     router: LLMRouter,
     cfg: Config,
     progress: BatchProgress,
+    scope: TaskScope | None = None,
 ) -> list[RuleCandidate]:
     instances = [P(router, cfg) for P in ALL_PIPELINES]
     progress.prepare_pipeline_progress(docs, instances)
@@ -394,6 +531,10 @@ async def _run_pipelines(
             "industry_context": industry_ctx,
             "jurisdiction": "中国大陆",
             "progress": progress,
+            "task_mode": scope.mode if scope else "full_library",
+            "task_mode_label": scope.mode_label if scope else "全量规则沉淀",
+            "scope_description": scope.scope_description if scope else "",
+            "our_party": scope.our_party if scope else "通用",
         }
 
         async def run_one(pipeline) -> list[RuleCandidate]:
@@ -564,6 +705,12 @@ def _do_exports(
     if buckets.get("negotiation"):
         paths["negotiation_csv"] = exports_dir / "negotiation.csv"
         export_negotiation_csv(buckets["negotiation"], paths["negotiation_csv"])
+    if buckets.get("out_of_scope"):
+        paths["out_of_scope_csv"] = exports_dir / "out_of_scope.csv"
+        export_out_of_scope_csv(buckets["out_of_scope"], paths["out_of_scope_csv"])
+    if any(getattr(rule, "task_mode", "") == "template_strategy" for rule in rules):
+        paths["template_strategy_md"] = exports_dir / "template_strategy.md"
+        export_template_strategy_md(rules, paths["template_strategy_md"])
 
     return paths
 
@@ -643,6 +790,10 @@ def _metadata_payload(rule: RuleCandidate) -> dict:
         "fidelity_failures": ", ".join(rule.fidelity_failures),
         "voice_match": rule.voice_match,
         "output_target": rule.output_target,
+        "task_mode": rule.task_mode,
+        "scope_match": rule.scope_match,
+        "scope_reason": rule.scope_reason,
+        "template_anchor": rule.template_anchor,
     }
 
 
@@ -677,12 +828,23 @@ async def run_batch(
     router.usage_callback = progress.add_token_usage
     progress.total_files = len(file_metas)
     progress.status = "running"
+    parse_metas = [
+        {
+            **meta,
+            "ocr_enabled": cfg.ocr.enabled or bool(meta.get("is_scanned", False)),
+            "ocr_engine": cfg.ocr.engine,
+            "ocr_language": cfg.ocr.language,
+        }
+        for meta in file_metas
+    ]
 
     progress.current_step = "parsing"
-    docs = await _parse_all(file_metas, batch_dir, progress, cfg.concurrency.files)
+    docs = await _parse_all(parse_metas, batch_dir, progress, cfg.concurrency.files)
+    scope = _build_task_scope(file_metas, docs)
 
     progress.current_step = "extracting"
-    candidates = await _run_pipelines(docs, router, cfg, progress)
+    candidates = await _run_pipelines(docs, router, cfg, progress, scope)
+    candidates = _apply_task_scope(candidates, scope)
 
     progress.current_step = "finalizing"
     rules = _finalize(candidates, cfg)
@@ -792,6 +954,10 @@ def candidate_to_api_dict(rule: RuleCandidate) -> dict:
         "fidelity_failures": list(rule.fidelity_failures),
         "voice_match": rule.voice_match,
         "output_target": rule.output_target,
+        "task_mode": rule.task_mode,
+        "scope_match": rule.scope_match,
+        "scope_reason": rule.scope_reason,
+        "template_anchor": rule.template_anchor,
     }
 
 

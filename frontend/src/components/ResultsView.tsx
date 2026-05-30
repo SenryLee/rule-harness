@@ -6,7 +6,7 @@ import {
 } from '../api';
 import type { RuleItem } from '../api';
 
-type ResultsTab = 'main' | 'placeholder' | 'discarded' | 'negotiation';
+type ResultsTab = 'main' | 'placeholder' | 'discarded' | 'negotiation' | 'out_of_scope';
 
 interface ResultsViewProps {
   batchId: string;
@@ -18,6 +18,7 @@ const TABS: Array<{ key: ResultsTab; label: string }> = [
   { key: 'placeholder', label: '占位' },
   { key: 'discarded', label: '弃用' },
   { key: 'negotiation', label: '谈判阶梯' },
+  { key: 'out_of_scope', label: '范围外' },
 ];
 
 function RiskBadge({ level }: { level?: string }) {
@@ -54,7 +55,7 @@ function pctText(numerator: number, denominator: number): string {
 
 function targetOf(rule: RuleItem): ResultsTab {
   const target = rule.output_target || 'main';
-  if (target === 'placeholder' || target === 'discarded' || target === 'negotiation') return target;
+  if (target === 'placeholder' || target === 'discarded' || target === 'negotiation' || target === 'out_of_scope') return target;
   return 'main';
 }
 
@@ -91,6 +92,7 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
       placeholder: 0,
       discarded: 0,
       negotiation: 0,
+      out_of_scope: 0,
     };
     rules.forEach((rule) => {
       next[targetOf(rule)] += 1;
@@ -123,6 +125,11 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
       discardedRate: pctText(counts.discarded, total),
     };
   }, [counts, rules]);
+
+  const hasTemplateStrategy = useMemo(
+    () => rules.some((rule) => rule.task_mode === 'template_strategy'),
+    [rules],
+  );
 
   const handleApplyMerge = useCallback(async () => {
     if (!confirm('确认将本批次规则合并到主规则库？此操作不可撤销。')) return;
@@ -251,6 +258,10 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
           <ExportButton label="占位CSV" onClick={() => downloadExport(batchId, 'placeholders-csv')} />
           <ExportButton label="弃用CSV" onClick={() => downloadExport(batchId, 'discarded-csv')} />
           <ExportButton label="谈判CSV" onClick={() => downloadExport(batchId, 'negotiation-csv')} />
+          <ExportButton label="范围外CSV" onClick={() => downloadExport(batchId, 'out-of-scope-csv')} />
+          {hasTemplateStrategy && (
+            <ExportButton label="模板骨架" onClick={() => downloadExport(batchId, 'template-strategy')} />
+          )}
           <ExportButton label="元数据CSV" onClick={() => downloadExport(batchId, 'metadata-csv')} />
           <ExportButton label="冲突HTML" onClick={() => downloadExport(batchId, 'conflict-report')} />
           <ExportButton label="变更集CSV" onClick={() => downloadExport(batchId, 'change-set')} />
@@ -304,6 +315,8 @@ function DetailDrawer({ rule, onClose }: { rule: RuleItem; onClose: () => void }
             <div><div className="text-xs text-gray-400 mb-1">风险级别</div><RiskBadge level={rule.risk_level} /></div>
             <Info label="管道" value={rule.pipeline || '-'} />
             <Info label="输出桶" value={rule.output_target || 'main'} />
+            <Info label="任务模式" value={rule.task_mode || 'full_library'} />
+            <Info label="范围匹配" value={rule.scope_match || 'in_scope'} />
             <Info label="合同类型" value={rule.contract_types?.join('、') || '-'} />
             <Info label="来源类别" value={rule.source_tag || '-'} />
           </div>
@@ -311,6 +324,11 @@ function DetailDrawer({ rule, onClose }: { rule: RuleItem; onClose: () => void }
           <Section title="检查项">{rule.check_item || '-'}</Section>
           <Section title="审查要求">{rule.requirement || '-'}</Section>
           {rule.notes && <Section title="备注">{rule.notes}</Section>}
+          {(rule.scope_reason || rule.template_anchor) && (
+            <Section title="范围依据">
+              {[rule.scope_reason, rule.template_anchor ? `模板锚点：${rule.template_anchor}` : ''].filter(Boolean).join('\n')}
+            </Section>
+          )}
 
           <div className="pt-4 border-t border-air-border">
             <div className="text-xs text-gray-400 mb-2">校验结果</div>

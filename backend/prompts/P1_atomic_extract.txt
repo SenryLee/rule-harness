@@ -70,11 +70,17 @@
 【覆盖率优先策略】
 {coverage_policy}
 
+【本次任务目标】
+{task_guidance}
+
 [USER]
 来源文件：{filename}
 来源类别：{source_tag}（优先级 P{priority}）
 合同类型：{contract_types}
 法域：{jurisdiction}
+任务模式：{task_mode_label}
+我方立场：{our_party}
+用户范围说明：{scope_description}
 段落定位：{location}
 
 【原文】
