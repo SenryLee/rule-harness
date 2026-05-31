@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyMerge,
   downloadExport,
+  fetchBatchProgress,
   fetchBatchRules,
 } from '../api';
-import type { RuleItem } from '../api';
+import type { BatchProgress, RuleItem } from '../api';
 
 type ResultsTab = 'main' | 'placeholder' | 'discarded' | 'negotiation' | 'out_of_scope';
 
@@ -61,6 +62,7 @@ function targetOf(rule: RuleItem): ResultsTab {
 
 export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
   const [rules, setRules] = useState<RuleItem[]>([]);
+  const [progress, setProgress] = useState<BatchProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ResultsTab>('main');
@@ -71,9 +73,15 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchBatchRules(batchId, { page_size: 1000 })
-      .then((res) => {
-        if (!cancelled) setRules(res.rules);
+    Promise.all([
+      fetchBatchRules(batchId, { page_size: 1000 }),
+      fetchBatchProgress(batchId).catch(() => null),
+    ])
+      .then(([res, nextProgress]) => {
+        if (!cancelled) {
+          setRules(res.rules);
+          setProgress(nextProgress);
+        }
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -130,6 +138,7 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
     () => rules.some((rule) => rule.task_mode === 'template_strategy'),
     [rules],
   );
+  const progressErrors = progress?.errors || [];
 
   const handleApplyMerge = useCallback(async () => {
     if (!confirm('确认将本批次规则合并到主规则库？此操作不可撤销。')) return;
@@ -170,6 +179,22 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
           <div className="font-mono text-sm text-gray-400 mt-1">{batchId}</div>
         </div>
       </div>
+
+      {progressErrors.length > 0 && (
+        <div className="card p-4 mb-6 border-amber-200 bg-amber-50">
+          <div className="text-sm font-semibold text-amber-700">本批次存在处理错误</div>
+          <div className="mt-2 space-y-1">
+            {progressErrors.slice(0, 5).map((item, index) => (
+              <div key={`${item}-${index}`} className="font-mono text-xs text-amber-800 break-all">
+                {item}
+              </div>
+            ))}
+          </div>
+          {progressErrors.length > 5 && (
+            <div className="mt-2 text-xs text-amber-700">另有 {progressErrors.length - 5} 条错误未展示。</div>
+          )}
+        </div>
+      )}
 
       <div className="card p-5 mb-6">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

@@ -10,6 +10,7 @@ from ..config import Config
 from ..harness import THEME_KEYS, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate
+from .errors import record_llm_failure
 from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,9 @@ class P1BodyPipeline:
                 user=user_prompt,
                 temperature=0.2,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("LLM call failed for block %s in %s", block.block_id, doc.filename)
+            record_llm_failure(ctx, self.pipeline_id, doc.filename, block.block_id, exc)
             return []
 
         if obj.get("informational"):

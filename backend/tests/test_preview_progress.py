@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from backend.orchestrator import BatchProgress, FidelityStats, PipelineFileState, PipelineState, _pipeline_units
 from backend.config import load_config
 from backend.parsers import ContentBlock, ParsedDocument, parse_file
@@ -147,6 +149,65 @@ def test_batch_progress_accumulates_token_usage():
     progress.add_token_usage({})
 
     assert progress.tokens_used == 24
+
+
+def test_p1_llm_failure_is_reported_to_batch_progress():
+    class FakePrimary:
+        name = "fake"
+
+    class FailingRouter:
+        primary = FakePrimary()
+
+        async def chat_json(self, system, user, temperature):
+            raise RuntimeError("HTTP Error 402: Payment Required")
+
+    doc = ParsedDocument(
+        sha256="x",
+        filename="合同.docx",
+        source_tag="历史合同",
+        priority=5,
+        contract_types=["通用商事"],
+        industry_context=None,
+        is_scanned=False,
+        blocks=(ContentBlock("p1", "付款期限应在验收后30日内完成。", "1", "paragraph"),),
+        comments=(),
+        revisions=(),
+        is_redline_doc=False,
+        is_case_doc=False,
+        is_passthrough=False,
+    )
+    progress = BatchProgress()
+    pipe = P1BodyPipeline(FailingRouter(), load_config())
+
+    rules = __import__("asyncio").run(
+        pipe._extract_block(doc, doc.blocks[0], {"progress": progress})
+    )
+
+    assert rules == []
+    assert progress.errors
+    assert progress.errors[0].startswith("llm_failed:P1:合同.docx:p1:RuntimeError")
+    assert "402" in progress.errors[0]
+
+
+def test_parse_legacy_doc_uses_available_text_converter(tmp_path, monkeypatch):
+    path = tmp_path / "旧版合同.doc"
+    path.write_bytes(b"legacy-doc-binary")
+
+    monkeypatch.setattr(
+        "backend.parsers.shutil.which",
+        lambda tool: "/usr/bin/textutil" if tool == "textutil" else None,
+    )
+
+    def fake_run(cmd, check, capture_output, text, timeout):
+        assert cmd[:4] == ["textutil", "-convert", "txt", "-stdout"]
+        return SimpleNamespace(returncode=0, stdout="付款条款\n\n违约责任", stderr="")
+
+    monkeypatch.setattr("backend.parsers.subprocess.run", fake_run)
+
+    parsed = parse_file(path, source_tag="历史合同", contract_types=["通用商事"])
+
+    assert parsed.parse_warnings == ()
+    assert [block.text for block in parsed.blocks] == ["付款条款", "违约责任"]
 
 
 def test_parse_docx_keeps_table_rows_for_extraction(tmp_path):

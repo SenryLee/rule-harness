@@ -13,6 +13,7 @@ from ..config import Config
 from ..harness import THEME_KEYS, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import CommentBlock, ParsedDocument, RuleCandidate
+from .errors import record_llm_failure
 from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,10 @@ class P2CommentPipeline:
             obj = await self.router.chat_json(
                 system=system_prompt, user=user_prompt, temperature=0.2
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("P2 LLM call failed for comment %s in %s",
                              comment.comment_id, doc.filename)
+            record_llm_failure(ctx, self.pipeline_id, doc.filename, comment.comment_id, exc)
             return []
 
         out: list[RuleCandidate] = []

@@ -19,6 +19,7 @@ from ..config import Config
 from ..harness import THEME_KEYS, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RevisionBlock, RuleCandidate
+from .errors import record_llm_failure
 from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,10 @@ class P3RevisionPipeline:
             obj = await self.router.chat_json(
                 system=system_prompt, user=user_prompt, temperature=0.1
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("P3 LLM call failed for revision %s in %s",
                              rev.rev_id, doc.filename)
+            record_llm_failure(ctx, self.pipeline_id, doc.filename, rev.rev_id, exc)
             return []
 
         out: list[RuleCandidate] = []

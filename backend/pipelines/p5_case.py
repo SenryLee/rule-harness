@@ -9,6 +9,7 @@ from ..config import Config
 from ..harness import THEME_KEYS, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate
+from .errors import record_llm_failure
 from ..prompt_loader import PromptSections, load_prompt, render_system_user
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,9 @@ class P5CasePipeline:
                 user=user_prompt,
                 temperature=0.2,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("P5 LLM call failed for %s at %s", doc.filename, chunk.location)
+            record_llm_failure(ctx, self.pipeline_id, doc.filename, chunk.location, exc)
             return []
 
         results: list[RuleCandidate] = []

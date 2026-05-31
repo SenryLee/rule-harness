@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
@@ -98,10 +100,11 @@ class RuleCandidate:
 
 
 _DOCX_EXT = {".docx"}
+_DOC_EXT = {".doc"}
 _PDF_EXT = {".pdf"}
 _XLSX_EXT = {".xlsx", ".xlsm", ".xls", ".csv", ".tsv"}
 _TXT_EXT = {".txt", ".md", ".text"}
-_SUPPORTED_EXT = _DOCX_EXT | _PDF_EXT | _XLSX_EXT | _TXT_EXT
+_SUPPORTED_EXT = _DOCX_EXT | _DOC_EXT | _PDF_EXT | _XLSX_EXT | _TXT_EXT
 
 _PASSTHROUGH_HEADER_KEYWORDS = frozenset(
     {"风险", "检查", "审查", "标准", "说明", "要求", "关键词", "风险点", "风险程度",
@@ -233,6 +236,9 @@ def parse_file(
     if suffix in _DOCX_EXT:
         return parse_docx(filepath, source_tag, contract_types, industry_context,
                           is_scanned, is_redline, is_case, sha256, priority)
+    elif suffix in _DOC_EXT:
+        return parse_doc(filepath, source_tag, contract_types, industry_context,
+                         is_scanned, is_redline, is_case, sha256, priority)
     elif suffix in _PDF_EXT:
         return parse_pdf(filepath, source_tag, contract_types, industry_context,
                          is_scanned, is_redline, is_case, sha256, priority,
@@ -259,7 +265,103 @@ def parse_file(
             is_redline_doc=is_redline,
             is_case_doc=is_case,
             is_passthrough=False,
+            parse_warnings=(f"unsupported_file_type:{suffix or '<none>'}",),
         )
+
+
+def parse_doc(
+    filepath: Path,
+    source_tag: str,
+    contract_types: list[str],
+    industry_context: dict | None = None,
+    is_scanned: bool = False,
+    is_redline: bool = False,
+    is_case: bool = False,
+    sha256: str | None = None,
+    priority: int | None = None,
+) -> ParsedDocument:
+    """Parse legacy Word .doc files through available system converters."""
+    if sha256 is None:
+        sha256 = compute_sha256(filepath)
+    if priority is None:
+        priority = _resolve_source_priority(source_tag)
+
+    text, warning = _extract_doc_text(filepath)
+    if not text.strip():
+        return _empty_parsed(
+            filepath.name,
+            source_tag,
+            contract_types,
+            industry_context,
+            is_scanned,
+            is_redline,
+            is_case,
+            sha256,
+            priority,
+            parse_warnings=(warning or "legacy_doc_no_text",),
+        )
+
+    blocks = tuple(_chunk_by_double_newline(text, "doc", 0))
+    if not blocks:
+        blocks = (
+            ContentBlock(
+                block_id="doc-0",
+                text=text.strip(),
+                location="doc-0",
+                block_type="paragraph",
+            ),
+        )
+
+    return ParsedDocument(
+        sha256=sha256,
+        filename=filepath.name,
+        source_tag=source_tag,
+        priority=priority,
+        contract_types=list(contract_types),
+        industry_context=industry_context,
+        is_scanned=is_scanned,
+        blocks=blocks,
+        comments=(),
+        revisions=(),
+        is_redline_doc=is_redline,
+        is_case_doc=is_case,
+        is_passthrough=False,
+        parse_warnings=(),
+    )
+
+
+def _extract_doc_text(filepath: Path) -> tuple[str, str | None]:
+    commands = [
+        ("textutil", ["textutil", "-convert", "txt", "-stdout", str(filepath)]),
+        ("antiword", ["antiword", str(filepath)]),
+        ("catdoc", ["catdoc", str(filepath)]),
+    ]
+    missing: list[str] = []
+    failures: list[str] = []
+
+    for tool, cmd in commands:
+        if shutil.which(tool) is None:
+            missing.append(tool)
+            continue
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception as exc:
+            failures.append(f"{tool}:{type(exc).__name__}")
+            continue
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout, None
+        detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
+        failures.append(f"{tool}:{proc.returncode}:{detail[:120]}")
+
+    if failures:
+        return "", "legacy_doc_conversion_failed:" + "|".join(failures)
+    return "", "legacy_doc_converter_missing:" + ",".join(missing)
 
 
 def parse_docx(
@@ -907,6 +1009,7 @@ def _empty_parsed(
     is_case: bool,
     sha256: str,
     priority: int,
+    parse_warnings: tuple[str, ...] = (),
 ) -> ParsedDocument:
     return ParsedDocument(
         sha256=sha256,
@@ -922,6 +1025,7 @@ def _empty_parsed(
         is_redline_doc=is_redline,
         is_case_doc=is_case,
         is_passthrough=False,
+        parse_warnings=parse_warnings,
     )
 
 

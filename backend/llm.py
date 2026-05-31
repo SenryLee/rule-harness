@@ -123,7 +123,10 @@ class DeepSeekProvider(LLMProvider):
                             timeout=aiohttp.ClientTimeout(total=timeout),
                         ) as resp:
                             raw_text = await resp.text()
-                            raw = json.loads(raw_text)
+                            try:
+                                raw = json.loads(raw_text)
+                            except json.JSONDecodeError:
+                                raw = {"raw": raw_text}
 
                             if resp.status == 429:
                                 retry_after = _extract_retry_after(raw, attempt)
