@@ -70,6 +70,30 @@ class LLMProvider(ABC):
 
 class DeepSeekProvider(LLMProvider):
     name = "deepseek"
+    token_limit_field = "max_tokens"
+
+    def _build_payload(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        response_format: str | None,
+    ) -> dict:
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            self.token_limit_field: max_tokens,
+        }
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
     async def chat(
         self,
@@ -81,19 +105,8 @@ class DeepSeekProvider(LLMProvider):
     ) -> LLMResponse:
         import aiohttp
 
-        payload: dict = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if response_format == "json":
-            payload["response_format"] = {"type": "json_object"}
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        payload = self._build_payload(messages, temperature, max_tokens, response_format)
+        headers = self._headers()
 
         url = f"{self.base_url}/chat/completions"
         max_retries = 4
@@ -151,6 +164,29 @@ class DeepSeekProvider(LLMProvider):
 
 class OpenAIProvider(DeepSeekProvider):
     name = "openai"
+
+
+class MimoProvider(DeepSeekProvider):
+    name = "mimo"
+    token_limit_field = "max_completion_tokens"
+
+    def _build_payload(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        response_format: str | None,
+    ) -> dict:
+        payload = super()._build_payload(messages, temperature, max_tokens, response_format)
+        payload["thinking"] = {"type": "disabled"}
+        payload.setdefault("stream", False)
+        return payload
+
+    def _headers(self) -> dict:
+        return {
+            "api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
 
 
 def _extract_retry_after(raw: dict, attempt: int) -> float:
@@ -217,6 +253,14 @@ class LLMRouter:
 
 def _resolve_provider(raw: dict) -> LLMProvider:
     provider_name = raw.get("provider", "").lower()
+    if provider_name == "mimo":
+        return MimoProvider(
+            api_key=raw["api_key"],
+            base_url=raw.get("base_url") or "https://api.xiaomimimo.com/v1",
+            model=raw.get("model") or "mimo-v2.5-pro",
+            rpm_limit=raw.get("rpm_limit", 60),
+            tpm_limit=raw.get("tpm_limit", 200_000),
+        )
     if provider_name == "openai":
         return OpenAIProvider(
             api_key=raw["api_key"],

@@ -197,6 +197,32 @@ const BUILTIN_PROFILE_NAMES = new Set([
   'test',
 ]);
 
+const MODEL_PROVIDER_OPTIONS = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'azure', label: 'Azure OpenAI' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'mimo', label: '小米 MiMo' },
+  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'qwen', label: '通义千问' },
+  { value: 'moonshot', label: 'Moonshot' },
+  { value: 'custom', label: '自定义' },
+];
+
+const MODEL_PROVIDER_PRESETS: Record<string, Partial<Config['models']['primary']>> = {
+  mimo: {
+    base_url: 'https://api.xiaomimimo.com/v1',
+    model: 'mimo-v2.5-pro',
+    rpm_limit: 60,
+    tpm_limit: 200000,
+  },
+  deepseek: {
+    base_url: 'https://api.deepseek.com/v1',
+  },
+  openai: {
+    base_url: 'https://api.openai.com/v1',
+  },
+};
+
 function RedlineKeywordsPicker({
   selected,
   onChange,
@@ -488,6 +514,23 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
     [],
   );
 
+  const updateModelProvider = useCallback(
+    (target: 'primary' | 'fallback', provider: string) => {
+      setConfig((prev) => {
+        const models = { ...prev.models };
+        const preset = MODEL_PROVIDER_PRESETS[provider] || {};
+        if (target === 'primary') {
+          models.primary = { ...models.primary, provider, ...preset } as typeof models.primary;
+        } else {
+          const fb = models.fallback || models.primary;
+          models.fallback = { ...fb, provider, ...preset } as typeof models.primary;
+        }
+        return { ...prev, models };
+      });
+    },
+    [],
+  );
+
   const updateExtraction = useCallback((field: keyof ConfigExtraction, value: unknown) => {
     setConfig((prev) => ({
       ...prev,
@@ -684,16 +727,14 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                     <select
                       id="primary-provider"
                       value={config.models.primary.provider}
-                      onChange={(e) => updateModelField('primary', 'provider', e.target.value)}
+                      onChange={(e) => updateModelProvider('primary', e.target.value)}
                       className="select-field"
                     >
-                      <option value="openai">OpenAI</option>
-                      <option value="azure">Azure OpenAI</option>
-                      <option value="deepseek">DeepSeek</option>
-                      <option value="zhipu">智谱 GLM</option>
-                      <option value="qwen">通义千问</option>
-                      <option value="moonshot">Moonshot</option>
-                      <option value="custom">自定义</option>
+                      {MODEL_PROVIDER_OPTIONS.map((provider) => (
+                        <option key={provider.value} value={provider.value}>
+                          {provider.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -714,7 +755,7 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                       value={config.models.primary.api_key}
                       onChange={(e) => updateModelField('primary', 'api_key', e.target.value)}
                       className="input-field"
-                      placeholder="sk-..."
+                      placeholder={config.models.primary.provider === 'mimo' ? 'MIMO_API_KEY，使用前输入' : 'sk-...'}
                     />
                   </div>
                   <div>
@@ -780,16 +821,14 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
                         <select
                           id="fallback-provider"
                           value={config.models.fallback.provider}
-                          onChange={(e) => updateModelField('fallback', 'provider', e.target.value)}
+                          onChange={(e) => updateModelProvider('fallback', e.target.value)}
                           className="select-field"
                         >
-                          <option value="openai">OpenAI</option>
-                          <option value="azure">Azure OpenAI</option>
-                          <option value="deepseek">DeepSeek</option>
-                          <option value="zhipu">智谱 GLM</option>
-                          <option value="qwen">通义千问</option>
-                          <option value="moonshot">Moonshot</option>
-                          <option value="custom">自定义</option>
+                          {MODEL_PROVIDER_OPTIONS.map((provider) => (
+                            <option key={provider.value} value={provider.value}>
+                              {provider.label}
+                            </option>
+                          ))}
                         </select>
                       </div>
                       <div>

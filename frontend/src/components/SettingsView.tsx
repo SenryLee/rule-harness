@@ -28,7 +28,22 @@ const REDLINE_PRESETS = [
   { group: '合规高敏', words: ['反贿赂', '反洗钱', '数据出境', '个人信息', '制裁', '独占许可', '排他许可', '永久许可', '全球范围'] },
 ];
 
-const PROVIDERS = ['openai', 'deepseek', 'zhipu', 'qwen', 'moonshot'];
+const PROVIDERS = ['openai', 'deepseek', 'mimo', 'zhipu', 'qwen', 'moonshot'];
+
+const PROVIDER_PRESETS: Record<string, Partial<ModelConfig>> = {
+  mimo: {
+    base_url: 'https://api.xiaomimimo.com/v1',
+    model: 'mimo-v2.5-pro',
+    rpm_limit: 60,
+    tpm_limit: 200000,
+  },
+  deepseek: {
+    base_url: 'https://api.deepseek.com/v1',
+  },
+  openai: {
+    base_url: 'https://api.openai.com/v1',
+  },
+};
 
 function toNumber(value: string, fallback: number): number {
   const n = Number(value);
@@ -122,6 +137,10 @@ export default function SettingsView() {
       };
       return { ...prev, models: { ...prev.models, [slot]: { ...current, ...patch } } };
     });
+  }
+
+  function selectProvider(slot: keyof ConfigModels, provider: string) {
+    patchModel(slot, { provider, ...(PROVIDER_PRESETS[provider] || {}) });
   }
 
   function toggleKeyword(word: string) {
@@ -226,7 +245,7 @@ export default function SettingsView() {
             <h2 className="mb-4 text-sm font-bold text-[var(--text-primary)]">主模型</h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="Provider">
-                <SelectInput value={config.models.primary.provider} onChange={(event) => patchModel('primary', { provider: event.target.value })}>
+                <SelectInput value={config.models.primary.provider} onChange={(event) => selectProvider('primary', event.target.value)}>
                   {PROVIDERS.map((provider) => (
                     <option key={provider} value={provider}>{provider}</option>
                   ))}
@@ -239,7 +258,7 @@ export default function SettingsView() {
                 <TextInput
                   type="password"
                   value={primaryApiKeyDraft}
-                  placeholder={config.models.primary.api_key ? '已配置，输入新 Key 后覆盖' : '未配置'}
+                  placeholder={config.models.primary.api_key ? '已配置，输入新 Key 后覆盖' : '使用前输入 API Key'}
                   onChange={(event) => setPrimaryApiKeyDraft(event.target.value)}
                 />
               </Field>
