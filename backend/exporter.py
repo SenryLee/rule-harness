@@ -52,6 +52,7 @@ _METADATA_CSV_HEADERS = [
     # v1.1
     "忠实度通过", "忠实度失败项", "语态匹配", "输出目标",
     "任务模式", "范围匹配", "范围理由", "模板锚点",
+    "前提假设", "行为模式", "后果", "例外条件", "审查动作", "转化说明",
 ]
 
 
@@ -293,6 +294,12 @@ def export_metadata_csv(
                 getattr(rule, "scope_match", "in_scope"),
                 getattr(rule, "scope_reason", ""),
                 getattr(rule, "template_anchor", ""),
+                getattr(rule, "assumption", ""),
+                getattr(rule, "behavior_mode", ""),
+                getattr(rule, "consequence", ""),
+                getattr(rule, "exception_conditions", ""),
+                getattr(rule, "review_action", ""),
+                getattr(rule, "transformation_note", ""),
             ])
 
 

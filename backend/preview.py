@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from backend.config import PROJECT_ROOT
+from backend.document_profile import profile_document
 
 PROFILES_DIR = PROJECT_ROOT / "profiles"
 
@@ -127,6 +128,7 @@ def preview_classify_text(filename: str, text: str) -> dict[str, Any]:
     source_tag, source_evidence, source_confidence = _classify_source(filename, text)
     contract_types, type_evidence, contract_confidence = _classify_profiles(filename, text)
     our_party, party_evidence, party_confidence = _classify_party(f"{filename}\n{text}")
+    document_profile = profile_document(filename, text)
 
     confidence = max(
         0.2,
@@ -155,6 +157,7 @@ def preview_classify_text(filename: str, text: str) -> dict[str, Any]:
         "suggested_is_case": source_tag == "案例" and auto_apply_source,
         "suggested_is_redline": source_tag == "公司红线" and auto_apply_source,
         "evidence": evidence,
+        "document_profile": document_profile,
     }
 
 

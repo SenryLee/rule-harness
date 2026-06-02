@@ -73,6 +73,21 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function displayValue(value: string | string[] | number | null | undefined): string | null {
+  if (value == null) return null;
+  if (Array.isArray(value)) return value.filter(Boolean).join('、') || null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function formatProfileConfidence(value: string | number | null | undefined): string | null {
+  if (value == null) return null;
+  if (typeof value === 'number') {
+    return `${Math.round((value <= 1 ? value * 100 : value))}%`;
+  }
+  return displayValue(value);
+}
+
 function progressDone(status?: string): boolean {
   return status === 'success' || status === 'completed' || status === 'partial' || status === 'merged';
 }
@@ -85,6 +100,30 @@ function defaultMeta(): CreateBatchMeta {
     is_scanned: false,
     jurisdiction: '中国大陆',
   };
+}
+
+function DocumentProfileSummary({ profile }: { profile?: PreviewClassifyResponse['document_profile'] | null }) {
+  if (!profile) return null;
+  const rows = [
+    { label: '资料体裁', value: displayValue(profile.document_genre ?? profile.document_type ?? profile.genre) },
+    { label: '权威层级', value: displayValue(profile.authority_level) },
+    { label: '主主题', value: displayValue(profile.primary_theme ?? profile.primary_legal_topic ?? profile.main_topic) },
+    { label: '辅助场景', value: displayValue(profile.secondary_scenarios ?? profile.auxiliary_scenarios) },
+    { label: '处理建议', value: displayValue(profile.processing_suggestion ?? profile.processing_advice) },
+    { label: '置信度', value: formatProfileConfidence(profile.confidence) },
+  ].filter((row) => row.value);
+
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-1 text-xs text-gray-500 leading-relaxed">
+      {rows.map((row, index) => (
+        <span key={row.label}>
+          {index > 0 ? ' ｜ ' : ''}
+          <span className="text-gray-400">{row.label}：</span>{row.value}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh }: WorkbenchViewProps) {
@@ -413,6 +452,7 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
                         </span>
                       ) : null}
                     </div>
+                    {item.autoClass && <DocumentProfileSummary profile={item.autoClass.document_profile} />}
                   </div>
                 ))}
               </div>

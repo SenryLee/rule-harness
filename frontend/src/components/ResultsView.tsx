@@ -60,6 +60,11 @@ function targetOf(rule: RuleItem): ResultsTab {
   return 'main';
 }
 
+function fieldValue(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  return text || null;
+}
+
 export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
   const [rules, setRules] = useState<RuleItem[]>([]);
   const [progress, setProgress] = useState<BatchProgress | null>(null);
@@ -325,6 +330,14 @@ function DetailDrawer({ rule, onClose }: { rule: RuleItem; onClose: () => void }
   const ladderPreferred = rule.ladder_preferred || ladder.preferred;
   const ladderAcceptable = rule.ladder_acceptable || ladder.acceptable;
   const ladderUnacceptable = rule.ladder_unacceptable || ladder.unacceptable;
+  const deepAnalysisRows = [
+    { label: '适用假设', value: fieldValue(rule.assumption) },
+    { label: '行为模式', value: fieldValue(rule.behavior_mode) },
+    { label: '后果', value: fieldValue(rule.consequence) },
+    { label: '例外条件', value: fieldValue(rule.exception_conditions) },
+    { label: '审查动作', value: fieldValue(rule.review_action) },
+    { label: '转换说明', value: fieldValue(rule.transformation_note) },
+  ].filter((row) => row.value);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end animate-fade-in">
@@ -349,6 +362,19 @@ function DetailDrawer({ rule, onClose }: { rule: RuleItem; onClose: () => void }
           <Section title="检查项">{rule.check_item || '-'}</Section>
           <Section title="审查要求">{rule.requirement || '-'}</Section>
           {rule.notes && <Section title="备注">{rule.notes}</Section>}
+          {deepAnalysisRows.length > 0 && (
+            <div className="pt-4 border-t border-air-border">
+              <div className="text-xs text-gray-400 mb-2">深度分析</div>
+              <div className="space-y-3">
+                {deepAnalysisRows.map((row) => (
+                  <div key={row.label}>
+                    <div className="text-xs text-gray-400 mb-0.5">{row.label}</div>
+                    <div className="text-sm text-gray-900 whitespace-pre-wrap leading-relaxed">{row.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {(rule.scope_reason || rule.template_anchor) && (
             <Section title="范围依据">
               {[rule.scope_reason, rule.template_anchor ? `模板锚点：${rule.template_anchor}` : ''].filter(Boolean).join('\n')}

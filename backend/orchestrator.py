@@ -30,6 +30,7 @@ from . import storage
 from .config import Config, config_to_dict
 from .confidence import evaluate_confidence_batch
 from .dedupe import build_rule_ids, dedupe_with_priority
+from .document_profile import profile_document
 from .exporter import (
     _partition_by_target,
     export_change_set,
@@ -66,6 +67,10 @@ PIPELINE_LABELS: dict[str, str] = {
 }
 
 PIPELINE_ORDER = ("P1", "P2", "P3", "P4", "P5", "direct")
+
+LOW_OUTPUT_MIN_BLOCKS = 8
+LOW_OUTPUT_SPARSE_MIN_BLOCKS = 20
+LOW_OUTPUT_MIN_RULES_PER_BLOCK = 0.05
 
 
 @dataclass
@@ -159,6 +164,7 @@ class BatchProgress:
             "current_step": self.current_step,
             "total_files": self.total_files,
             "processed_files": self.processed_files,
+            "parsed_blocks": self.total_blocks,
             "total_blocks": self.total_blocks,
             "processed_blocks": self.processed_blocks,
             "total_rules": self.total_rules,
@@ -182,7 +188,7 @@ class BatchProgress:
             state = self.pipeline_progress[pipeline_id]
             skip_reasons: set[str] = set()
             for doc in docs:
-                applicable = pipeline.applicable(doc)
+                applicable = _pipeline_applicable(pipeline_id, pipeline, doc)
                 units = _pipeline_units(pipeline_id, doc) if applicable else 0
                 file_state = PipelineFileState(
                     filename=doc.filename,
@@ -289,14 +295,16 @@ def _pipeline_units(pipeline_id: str, doc: ParsedDocument) -> int:
     return 0
 
 
+def _pipeline_applicable(pipeline_id: str, pipeline: object, doc: ParsedDocument) -> bool:
+    if pipeline_id == "P1":
+        return not doc.is_passthrough and len(doc.blocks) > 0
+    return bool(pipeline.applicable(doc))
+
+
 def _skip_reason(pipeline_id: str, doc: ParsedDocument) -> str:
     if pipeline_id == "P1":
         if doc.is_passthrough:
             return "直通文件"
-        if doc.is_case_doc:
-            return "案例文件走 P5"
-        if doc.is_redline_doc:
-            return "红线文件走 P4"
         return "无正文块"
     if pipeline_id == "P2":
         return "无批注"
@@ -526,7 +534,11 @@ async def _run_pipelines(
 
     async def extract_doc(doc: ParsedDocument) -> list[RuleCandidate]:
         candidates: list[RuleCandidate] = []
-        applicable = [p for p in instances if p.applicable(doc)]
+        applicable = [
+            p for p in instances
+            if _pipeline_applicable(p.pipeline_id, p, doc)
+        ]
+        document_profile = _document_profile_for_doc(doc)
         ctx = {
             "industry_context": industry_ctx,
             "jurisdiction": "中国大陆",
@@ -535,6 +547,8 @@ async def _run_pipelines(
             "task_mode_label": scope.mode_label if scope else "全量规则沉淀",
             "scope_description": scope.scope_description if scope else "",
             "our_party": scope.our_party if scope else "通用",
+            "document_profile": document_profile,
+            "document_profile_text": _format_document_profile(document_profile),
         }
 
         async def run_one(pipeline) -> list[RuleCandidate]:
@@ -562,6 +576,28 @@ async def _run_pipelines(
     flat = [c for bundle in bundles for c in bundle]
     progress.total_rules = len(flat)
     return flat
+
+
+def _document_profile_for_doc(doc: ParsedDocument) -> dict:
+    preview_text = "\n".join(block.text for block in doc.blocks[:80])
+    return profile_document(doc.filename, preview_text[:20000])
+
+
+def _format_document_profile(profile: dict) -> str:
+    scenarios = profile.get("secondary_scenarios") or []
+    if isinstance(scenarios, str):
+        scenarios_text = scenarios
+    else:
+        scenarios_text = "、".join(str(item) for item in scenarios if item)
+    return "\n".join([
+        f"资料体裁：{profile.get('document_type', '未识别')}",
+        f"权威层级：{profile.get('authority_level', '未识别')}",
+        f"主法律主题：{profile.get('primary_legal_topic', '未识别')}",
+        f"辅助场景：{scenarios_text or '无'}",
+        f"处理建议：{profile.get('processing_suggestion', '无')}",
+        f"分类置信：{profile.get('classification_mode', 'unknown')} ({profile.get('confidence', 0)})",
+        "注意：资料画像只用于理解语境，不得据此减少基础正文抽取覆盖。",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +830,12 @@ def _metadata_payload(rule: RuleCandidate) -> dict:
         "scope_match": rule.scope_match,
         "scope_reason": rule.scope_reason,
         "template_anchor": rule.template_anchor,
+        "assumption": rule.assumption,
+        "behavior_mode": rule.behavior_mode,
+        "consequence": rule.consequence,
+        "exception_conditions": rule.exception_conditions,
+        "review_action": rule.review_action,
+        "transformation_note": rule.transformation_note,
     }
 
 
@@ -905,7 +947,89 @@ def _build_summary(
         "conflicts": conflicts,
         "merge_actions": actions,
         "errors": list(progress.errors),
+        "extraction_completeness": _build_extraction_completeness(rules, progress),
     }
+
+
+def _build_extraction_completeness(
+    rules: list[RuleCandidate],
+    progress: BatchProgress,
+) -> dict:
+    rules_per_file = _rules_per_file(rules, progress)
+    return {
+        "parsed_blocks": progress.total_blocks,
+        "total_blocks": progress.total_blocks,
+        "rules_per_file": rules_per_file,
+        "low_output_files": _low_output_files(rules_per_file, progress),
+        "pipeline_coverage": _pipeline_coverage(progress),
+    }
+
+
+def _rules_per_file(rules: list[RuleCandidate], progress: BatchProgress) -> dict[str, int]:
+    filenames: set[str] = set()
+    for state in progress.pipeline_progress.values():
+        filenames.update(state.files)
+
+    counts = {filename: 0 for filename in filenames}
+    for rule in rules:
+        filename = rule.source_filename or "(unknown)"
+        counts[filename] = counts.get(filename, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _low_output_files(rules_per_file: dict[str, int], progress: BatchProgress) -> list[dict]:
+    p1_files = progress.pipeline_progress.get("P1", PipelineState(label=PIPELINE_LABELS["P1"])).files
+    low_files: list[dict] = []
+
+    for filename, rules_count in sorted(rules_per_file.items()):
+        p1_state = p1_files.get(filename)
+        if not p1_state:
+            continue
+
+        blocks_total = p1_state.blocks_total
+        if blocks_total < LOW_OUTPUT_MIN_BLOCKS:
+            continue
+
+        reasons: list[str] = []
+        if rules_count == 0:
+            reasons.append("no_rules")
+        elif (
+            blocks_total >= LOW_OUTPUT_SPARSE_MIN_BLOCKS
+            and rules_count / blocks_total < LOW_OUTPUT_MIN_RULES_PER_BLOCK
+        ):
+            reasons.append("sparse_rules")
+
+        if p1_state.rules_emitted == 0:
+            reasons.append("basic_body_no_rules")
+
+        if reasons:
+            low_files.append({
+                "filename": filename,
+                "blocks_total": blocks_total,
+                "rules": rules_count,
+                "p1_rules": p1_state.rules_emitted,
+                "reasons": reasons,
+            })
+
+    return low_files
+
+
+def _pipeline_coverage(progress: BatchProgress) -> dict[str, dict]:
+    coverage: dict[str, dict] = {}
+    for pipeline_id in PIPELINE_ORDER:
+        state = progress.pipeline_progress.get(pipeline_id)
+        if not state:
+            continue
+        coverage[pipeline_id] = {
+            "label": state.label,
+            "status": state.status,
+            "files_total": state.files_total,
+            "files_done": state.files_done,
+            "blocks_total": state.blocks_total,
+            "blocks_done": state.blocks_done,
+            "rules_emitted": state.rules_emitted,
+        }
+    return coverage
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +1082,12 @@ def candidate_to_api_dict(rule: RuleCandidate) -> dict:
         "scope_match": rule.scope_match,
         "scope_reason": rule.scope_reason,
         "template_anchor": rule.template_anchor,
+        "assumption": rule.assumption,
+        "behavior_mode": rule.behavior_mode,
+        "consequence": rule.consequence,
+        "exception_conditions": rule.exception_conditions,
+        "review_action": rule.review_action,
+        "transformation_note": rule.transformation_note,
     }
 
 

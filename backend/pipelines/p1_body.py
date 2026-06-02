@@ -110,6 +110,12 @@ class P1BodyPipeline:
                 model=self.router.primary.name if self.router.primary else "",
                 struct_check_pass=struct_ok,
                 struct_failures=tuple(failures),
+                assumption=_string_field(rule, "assumption"),
+                behavior_mode=_string_field(rule, "behavior_mode"),
+                consequence=_string_field(rule, "consequence"),
+                exception_conditions=_string_field(rule, "exception_conditions"),
+                review_action=_string_field(rule, "review_action"),
+                transformation_note=_string_field(rule, "transformation_note"),
             )
             results.append(candidate)
 
@@ -136,6 +142,7 @@ class P1BodyPipeline:
                 "industry_context": industry_text,
                 "coverage_policy": _coverage_policy(self.cfg),
                 "task_guidance": _task_guidance(ctx),
+                "document_profile": str(ctx.get("document_profile_text") or "无"),
             },
             user_vars={
                 "filename": doc.filename,
@@ -200,3 +207,8 @@ def _task_guidance(ctx: dict) -> str:
             f"用户补充范围：{scope or '无'}。"
         )
     return "当前任务是全量规则沉淀，按来源文本完整抽取可复用审查规则。"
+
+
+def _string_field(rule: dict, field_name: str) -> str:
+    value = rule.get(field_name, "")
+    return "" if value is None else str(value)

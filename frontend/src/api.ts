@@ -191,6 +191,12 @@ export interface RuleItem {
   scope_match?: string;
   scope_reason?: string;
   template_anchor?: string;
+  assumption?: string;
+  behavior_mode?: string;
+  consequence?: string;
+  exception_conditions?: string;
+  review_action?: string;
+  transformation_note?: string;
 }
 
 export interface RuleListResponse {
@@ -368,7 +374,25 @@ export interface PreviewClassifyResponse {
   auto_apply_party?: boolean;
   suggested_is_case?: boolean;
   suggested_is_redline?: boolean;
+  document_profile?: DocumentProfile;
   evidence: string[];
+}
+
+export interface DocumentProfile {
+  document_genre?: string;
+  document_type?: string;
+  genre?: string;
+  authority_level?: string;
+  primary_theme?: string;
+  primary_legal_topic?: string;
+  main_topic?: string;
+  secondary_scenarios?: string[] | string;
+  auxiliary_scenarios?: string[] | string;
+  processing_suggestion?: string;
+  processing_advice?: string;
+  confidence?: number | string;
+  classification_mode?: string;
+  evidence?: string[];
 }
 
 export function previewClassify(file: File): Promise<PreviewClassifyResponse> {

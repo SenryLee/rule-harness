@@ -97,6 +97,13 @@ class RuleCandidate:
     scope_match: str = "in_scope"
     scope_reason: str = ""
     template_anchor: str = ""
+    # 可审计分析摘要字段：进入 metadata/API，不进入主 CSV。
+    assumption: str = ""
+    behavior_mode: str = ""
+    consequence: str = ""
+    exception_conditions: str = ""
+    review_action: str = ""
+    transformation_note: str = ""
 
 
 _DOCX_EXT = {".docx"}
