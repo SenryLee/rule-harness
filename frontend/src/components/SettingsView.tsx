@@ -40,6 +40,12 @@ const PROVIDER_PRESETS: Record<string, Partial<ModelConfig>> = {
   deepseek: {
     base_url: 'https://api.deepseek.com/v1',
   },
+  qwen: {
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'deepseek-v4-flash',
+    rpm_limit: 60,
+    tpm_limit: 200000,
+  },
   openai: {
     base_url: 'https://api.openai.com/v1',
   },

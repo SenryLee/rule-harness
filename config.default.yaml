@@ -1,18 +1,18 @@
 models:
   primary:
-    provider: deepseek
-    api_key: "sk-79d3ff66354f432f9354644e51478dcf"
-    base_url: https://api.deepseek.com/v1
+    provider: qwen
+    api_key: ""
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model: deepseek-v4-flash
     rpm_limit: 60
     tpm_limit: 200000
   fallback:
-    provider: null
+    provider: qwen
     api_key: ""
-    base_url: ""
-    model: ""
-    rpm_limit: 500
-    tpm_limit: 1000000
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model: deepseek-v4-flash
+    rpm_limit: 60
+    tpm_limit: 200000
 
 extraction:
   granularity: fine
