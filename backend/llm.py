@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -130,12 +131,12 @@ class DeepSeekProvider(LLMProvider):
 
                             if resp.status == 429:
                                 retry_after = _extract_retry_after(raw, attempt)
-                                await asyncio.sleep(retry_after)
+                                await asyncio.sleep(retry_after + random.uniform(0, 1))
                                 continue
 
                             if resp.status >= 500:
                                 if attempt < max_retries - 1:
-                                    await asyncio.sleep(2**attempt)
+                                    await asyncio.sleep(2**attempt + random.uniform(0, 1))
                                     continue
                                 raise LLMTransientError(
                                     f"Server error {resp.status}: {raw}"
@@ -158,7 +159,7 @@ class DeepSeekProvider(LLMProvider):
                             )
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(2**attempt)
+                        await asyncio.sleep(2**attempt + random.uniform(0, 1))
                         continue
                     raise LLMTransientError(f"Connection error: {e}") from e
 
