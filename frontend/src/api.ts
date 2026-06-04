@@ -433,6 +433,78 @@ export function fetchBatchProgress(id: string): Promise<BatchProgress> {
   return request<BatchProgress>(`/api/batches/${encodeURIComponent(id)}/progress`);
 }
 
+/**
+ * Subscribe to real-time batch progress via SSE.
+ * Falls back to polling if SSE connection fails.
+ * Returns a cleanup function.
+ */
+export function subscribeBatchProgress(
+  id: string,
+  onProgress: (progress: BatchProgress) => void,
+  onDone?: () => void,
+): () => void {
+  const url = `/api/batches/${encodeURIComponent(id)}/progress/stream`;
+  let closed = false;
+  let pollTimer: number | null = null;
+
+  const stopPolling = () => {
+    if (pollTimer !== null) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  const isDone = (status: string) => status === 'success' || status === 'partial' || status === 'failed';
+
+  const es = new EventSource(url);
+
+  es.onmessage = (event) => {
+    if (closed) return;
+    try {
+      const data = JSON.parse(event.data) as BatchProgress;
+      onProgress(data);
+      if (isDone(data.status)) {
+        closed = true;
+        es.close();
+        onDone?.();
+      }
+    } catch {
+      // ignore parse errors
+    }
+  };
+
+  es.onerror = () => {
+    if (closed) return;
+    if (pollTimer !== null) return;
+    // SSE failed; fall back to polling.
+    es.close();
+    pollTimer = window.setInterval(async () => {
+      if (closed) {
+        stopPolling();
+        return;
+      }
+      try {
+        const data = await fetchBatchProgress(id);
+        if (closed) return;
+        onProgress(data);
+        if (isDone(data.status)) {
+          closed = true;
+          stopPolling();
+          onDone?.();
+        }
+      } catch {
+        // keep polling
+      }
+    }, 1500);
+  };
+
+  return () => {
+    closed = true;
+    es.close();
+    stopPolling();
+  };
+}
+
 export function fetchBatchRules(id: string, filters: BatchRuleFilters = {}): Promise<RuleListResponse> {
   const qs = buildQueryString(filters as Record<string, unknown>);
   return request<RuleListResponse>(`/api/batches/${encodeURIComponent(id)}/rules${qs}`);
@@ -494,4 +566,105 @@ export function approveThemes(mappings: Array<{ rule_id: string; approved_theme:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mappings }),
   });
+}
+
+
+// ── Archive API ─────────────────────────────────────────────────────
+
+export interface ArchiveFileClassification {
+  original_name: string;
+  file_size: number;
+  document_type: string;
+  authority_level: string;
+  primary_topic: string;
+  source_tag: string;
+  confidence: number;
+  evidence: string[];
+  category_dir: string;
+  target_filename: string;
+  llm_enhanced: boolean;
+  llm_category: string | null;
+  llm_summary: string | null;
+  llm_confidence: number | null;
+}
+
+export interface ArchiveClassifyResponse {
+  session_id: string;
+  total_files: number;
+  files: ArchiveFileClassification[];
+  categories: Record<string, number>;
+}
+
+export interface ArchiveResult {
+  archive_id: string;
+  timestamp: string;
+  total_files: number;
+  high_confidence: number;
+  low_confidence: number;
+  directory_tree: Record<string, string[]>;
+  files: ArchiveFileClassification[];
+}
+
+export function archiveClassify(files: File[], useLlm: boolean = false): Promise<ArchiveClassifyResponse> {
+  const formData = new FormData();
+  files.forEach((file) => formData.append('files', file));
+  formData.append('use_llm', useLlm ? 'true' : 'false');
+  return request<ArchiveClassifyResponse>('/api/archive/classify', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export function archiveUpdateClassification(
+  sessionId: string,
+  updates: Array<{ original_name: string; category_dir: string }>,
+): Promise<{ session_id: string; files: ArchiveFileClassification[] }> {
+  return request('/api/archive/classify/' + encodeURIComponent(sessionId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+}
+
+export function archiveConfirm(sessionId: string): Promise<ArchiveResult> {
+  return request<ArchiveResult>('/api/archive/confirm/' + encodeURIComponent(sessionId), {
+    method: 'POST',
+  });
+}
+
+export function fetchArchiveResults(): Promise<ArchiveResult[]> {
+  return request<ArchiveResult[]>('/api/archive/results');
+}
+
+export function fetchArchiveCategories(): Promise<Record<string, string[]>> {
+  return request<Record<string, string[]>>('/api/archive/categories');
+}
+
+
+// ── Skill Generation API ────────────────────────────────────────────
+
+export interface SkillGenerateRequest {
+  domain_name: string;
+  party_perspectives: string[];
+  include_drafting: boolean;
+  llm_enhance: boolean;
+}
+
+export interface SkillGenerateResponse {
+  skill_id: string;
+  status: string;
+  file_count: number;
+  download_url: string;
+}
+
+export function generateSkill(batchId: string, config: SkillGenerateRequest): Promise<SkillGenerateResponse> {
+  return request<SkillGenerateResponse>(`/api/batches/${encodeURIComponent(batchId)}/generate-skill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export function downloadSkillZip(batchId: string): void {
+  window.open(`/api/batches/${encodeURIComponent(batchId)}/exports/skill-zip`, '_blank');
 }

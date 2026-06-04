@@ -1,17 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { deleteBatch, fetchBatches } from '../api';
 import type { Batch } from '../api';
+import { useApp } from '../context/AppContext';
 import { Icon } from './Ui';
-
-interface TaskPanelProps {
-  currentView: 'workbench' | 'settings';
-  selectedBatchId: string | null;
-  pendingNewTask: boolean;
-  onSelectBatch: (batch: Batch | null) => void;
-  onNewTask: () => void;
-  onOpenConfig: () => void;
-  refreshKey: number;
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return '-';
@@ -41,15 +32,12 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={config.className}>{config.label}</span>;
 }
 
-export default function TaskPanel({
-  currentView,
-  selectedBatchId,
-  pendingNewTask,
-  onSelectBatch,
-  onNewTask,
-  onOpenConfig,
-  refreshKey,
-}: TaskPanelProps) {
+export default function TaskPanel() {
+  const { state, selectBatch, newTask, setView } = useApp();
+  const { selectedBatch, currentView, refreshKey } = state;
+  const selectedBatchId = selectedBatch?.batch_id || null;
+  const pendingNewTask = !selectedBatch;
+
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,14 +70,14 @@ export default function TaskPanel({
       try {
         await deleteBatch(batch.batch_id);
         if (selectedBatchId === batch.batch_id) {
-          onSelectBatch(null);
+          selectBatch(null);
         }
         setBatches((prev) => prev.filter((item) => item.batch_id !== batch.batch_id));
       } catch (err) {
         alert(err instanceof Error ? err.message : '删除失败');
       }
     },
-    [onSelectBatch, selectedBatchId],
+    [selectBatch, selectedBatchId],
   );
 
   return (
@@ -105,17 +93,23 @@ export default function TaskPanel({
       </div>
 
       <nav className="flex-shrink-0 px-3 pb-2 pt-3">
-        <button type="button" onClick={onNewTask} className={`sidebar-nav-item w-full ${currentView === 'workbench' ? 'active' : ''}`}>
+        <button type="button" onClick={newTask} className={`sidebar-nav-item w-full ${currentView === 'workbench' ? 'active' : ''}`}>
           {currentView === 'workbench' && <span className="sidebar-nav-indicator" />}
           <Icon name="upload" size={18} />
           <span className="flex-1">任务工作台</span>
           <span className="kbd">1</span>
         </button>
-        <button type="button" onClick={onOpenConfig} className={`sidebar-nav-item w-full ${currentView === 'settings' ? 'active' : ''}`}>
+        <button type="button" onClick={() => setView('archive')} className={`sidebar-nav-item w-full ${currentView === 'archive' ? 'active' : ''}`}>
+          {currentView === 'archive' && <span className="sidebar-nav-indicator" />}
+          <Icon name="folder" size={18} />
+          <span className="flex-1">文件归档</span>
+          <span className="kbd">2</span>
+        </button>
+        <button type="button" onClick={() => setView('settings')} className={`sidebar-nav-item w-full ${currentView === 'settings' ? 'active' : ''}`}>
           {currentView === 'settings' && <span className="sidebar-nav-indicator" />}
           <Icon name="settings" size={18} />
           <span className="flex-1">系统设置</span>
-          <span className="kbd">2</span>
+          <span className="kbd">3</span>
         </button>
       </nav>
 
@@ -128,7 +122,7 @@ export default function TaskPanel({
             {batches.length} 个任务{totalRunning > 0 ? ` · ${totalRunning} 个运行中` : ''}
           </div>
         </div>
-        <button type="button" onClick={onNewTask} className="icon-button primary" title="新建任务">
+        <button type="button" onClick={newTask} className="icon-button primary" title="新建任务">
           <Icon name="plus" size={15} strokeWidth={2.2} />
         </button>
       </div>
@@ -136,7 +130,7 @@ export default function TaskPanel({
       {pendingNewTask && (
         <button
           type="button"
-          onClick={() => onSelectBatch(null)}
+          onClick={() => selectBatch(null)}
           className="mx-3 mb-2 rounded-md border border-[var(--border-accent)] bg-[var(--primary-soft)] px-3 py-3 text-left shadow-[var(--shadow-xs)]"
         >
           <div className="flex items-center justify-between mb-1">
@@ -177,7 +171,7 @@ export default function TaskPanel({
                 <button
                   key={batch.batch_id}
                   type="button"
-                  onClick={() => onSelectBatch(isSelected ? null : batch)}
+                  onClick={() => selectBatch(isSelected ? null : batch)}
                   className={`task-item ${
                     isSelected
                       ? 'selected'

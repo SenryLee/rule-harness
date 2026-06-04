@@ -1,37 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { AppProvider, useApp } from './context/AppContext';
+import ArchiveView from './components/ArchiveView';
 import TaskPanel from './components/TaskPanel';
 import WorkbenchView from './components/WorkbenchView';
 import ResultsView from './components/ResultsView';
 import SettingsView from './components/SettingsView';
 import { Icon } from './components/Ui';
-import type { Batch } from './api';
-
-type AppView = 'workbench' | 'settings';
 
 function isResultsStatus(status?: string): boolean {
   return status === 'success' || status === 'completed' || status === 'partial' || status === 'merged';
 }
 
-export default function App() {
-  const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
-  const [currentView, setCurrentView] = useState<AppView>('workbench');
-  const [refreshKey, setRefreshKey] = useState(0);
+function AppShell() {
+  const { state, newTask, setView } = useApp();
+  const { selectedBatch, currentView, refreshKey } = state;
+
   const [sidebarWidth, setSidebarWidth] = useState(272);
   const [isResizing, setIsResizing] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
 
-  const handleRefresh = useCallback(() => {
-    setRefreshKey((key) => key + 1);
-  }, []);
-
-  const handleNewTask = useCallback(() => {
-    setSelectedBatch(null);
-    setCurrentView('workbench');
-  }, []);
-
   const view = useMemo(
-    () => (currentView === 'settings' ? 'settings' : isResultsStatus(selectedBatch?.status) ? 'results' : 'workbench'),
+    () => {
+      if (currentView === 'settings') return 'settings';
+      if (currentView === 'archive') return 'archive';
+      return isResultsStatus(selectedBatch?.status) ? 'results' : 'workbench';
+    },
     [currentView, selectedBatch?.status],
   );
 
@@ -71,7 +65,7 @@ export default function App() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
         event.preventDefault();
-        handleNewTask();
+        newTask();
       }
       if (event.key === 'Escape') {
         setCommandOpen(false);
@@ -79,7 +73,7 @@ export default function App() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [handleNewTask]);
+  }, [newTask]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg)] text-[var(--text-primary)]">
@@ -87,18 +81,7 @@ export default function App() {
         className="flex-shrink-0 overflow-hidden bg-[var(--bg-surface)]"
         style={{ width: sidebarWidth, transition: isResizing ? 'none' : 'width var(--dur-normal) var(--ease-out)' }}
       >
-        <TaskPanel
-          currentView={currentView}
-          selectedBatchId={selectedBatch?.batch_id || null}
-          pendingNewTask={!selectedBatch}
-          onSelectBatch={(batch) => {
-            setSelectedBatch(batch);
-            setCurrentView('workbench');
-          }}
-          onNewTask={handleNewTask}
-          onOpenConfig={() => setCurrentView('settings')}
-          refreshKey={refreshKey}
-        />
+        <TaskPanel />
       </aside>
 
       <div
@@ -111,14 +94,12 @@ export default function App() {
         <div className="min-h-full px-5 py-6 md:px-8">
           {view === 'settings' ? (
             <SettingsView />
+          ) : view === 'archive' ? (
+            <ArchiveView />
           ) : view === 'results' && selectedBatch ? (
             <ResultsView batchId={selectedBatch.batch_id} refreshKey={refreshKey} />
           ) : (
-            <WorkbenchView
-              selectedBatch={selectedBatch}
-              onBatchUpdated={setSelectedBatch}
-              onRefresh={handleRefresh}
-            />
+            <WorkbenchView />
           )}
         </div>
       </main>
@@ -126,9 +107,12 @@ export default function App() {
       {commandOpen && (
         <CommandPalette
           onClose={() => setCommandOpen(false)}
-          onNewTask={handleNewTask}
+          onNewTask={() => {
+            newTask();
+            setCommandOpen(false);
+          }}
           onOpenConfig={() => {
-            setCurrentView('settings');
+            setView('settings');
             setCommandOpen(false);
           }}
         />
@@ -152,10 +136,7 @@ function CommandPalette({
       description: '创建新的规则抽取任务',
       icon: 'plus',
       shortcut: '⌘N',
-      run: () => {
-        onNewTask();
-        onClose();
-      },
+      run: onNewTask,
     },
     {
       label: '系统配置',
@@ -199,5 +180,13 @@ function CommandPalette({
         </div>
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppProvider>
+      <AppShell />
+    </AppProvider>
   );
 }

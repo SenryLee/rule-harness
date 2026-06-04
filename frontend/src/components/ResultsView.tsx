@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyMerge,
   downloadExport,
+  downloadSkillZip,
   fetchBatchProgress,
   fetchBatchRules,
+  generateSkill,
 } from '../api';
-import type { BatchProgress, RuleItem } from '../api';
+import type { BatchProgress, RuleItem, SkillGenerateResponse } from '../api';
+import { Icon } from './Ui';
 
 type ResultsTab = 'main' | 'placeholder' | 'discarded' | 'negotiation' | 'out_of_scope';
 
@@ -73,6 +76,14 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
   const [activeTab, setActiveTab] = useState<ResultsTab>('main');
   const [selectedRule, setSelectedRule] = useState<RuleItem | null>(null);
   const [applying, setApplying] = useState(false);
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false);
+  const [skillDomain, setSkillDomain] = useState('');
+  const [skillParties, setSkillParties] = useState(['甲方', '乙方']);
+  const [skillDrafting, setSkillDrafting] = useState(true);
+  const [skillLlm, setSkillLlm] = useState(false);
+  const [skillGenerating, setSkillGenerating] = useState(false);
+  const [skillResult, setSkillResult] = useState<SkillGenerateResponse | null>(null);
+  const [skillError, setSkillError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +168,25 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
       setApplying(false);
     }
   }, [batchId]);
+
+  const handleGenerateSkill = useCallback(async () => {
+    if (!skillDomain.trim()) return;
+    setSkillGenerating(true);
+    setSkillError(null);
+    try {
+      const result = await generateSkill(batchId, {
+        domain_name: skillDomain.trim(),
+        party_perspectives: skillParties.filter(Boolean),
+        include_drafting: skillDrafting,
+        llm_enhance: skillLlm,
+      });
+      setSkillResult(result);
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : '生成失败');
+    } finally {
+      setSkillGenerating(false);
+    }
+  }, [batchId, skillDomain, skillParties, skillDrafting, skillLlm]);
 
   if (loading) {
     return (
@@ -279,6 +309,122 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* ── Skill Generation Panel ── */}
+      <div className="card overflow-hidden mb-6">
+        <button
+          type="button"
+          onClick={() => setSkillPanelOpen((o) => !o)}
+          className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-[var(--bg-hover)] transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 text-white flex items-center justify-center shadow-sm">
+              <Icon name="sparkles" size={18} />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-gray-900">生成 Skill 压缩包</div>
+              <div className="text-xs text-gray-400 mt-0.5">
+                将本批次规则打包为可下载的法务 AI 平台 Skill（.zip）
+              </div>
+            </div>
+          </div>
+          <Icon name="chevron-right" size={16} className={`text-gray-400 transition-transform ${skillPanelOpen ? 'rotate-90' : ''}`} />
+        </button>
+
+        {skillPanelOpen && (
+          <div className="px-5 pb-5 border-t border-[var(--border)] pt-4 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="text-xs text-gray-500">
+                合同领域名称 *
+                <input
+                  type="text"
+                  value={skillDomain}
+                  onChange={(e) => setSkillDomain(e.target.value)}
+                  placeholder="例如：采购合同、股权转让协议"
+                  className="input-field text-sm"
+                />
+              </label>
+              <label className="text-xs text-gray-500">
+                主体立场（逗号分隔）
+                <input
+                  type="text"
+                  value={skillParties.join(', ')}
+                  onChange={(e) => setSkillParties(e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean))}
+                  placeholder="甲方, 乙方"
+                  className="input-field text-sm"
+                />
+              </label>
+            </div>
+            <div className="flex items-center gap-6">
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={skillDrafting}
+                  onChange={(e) => setSkillDrafting(e.target.checked)}
+                  className="rounded border-gray-300 text-primary focus:ring-primary/30"
+                />
+                包含起草模式
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={skillLlm}
+                  onChange={(e) => setSkillLlm(e.target.checked)}
+                  className="rounded border-gray-300 text-primary focus:ring-primary/30"
+                />
+                <Icon name="sparkles" size={14} className="text-amber-500" />
+                LLM 增强（优化术语表和描述）
+              </label>
+            </div>
+
+            {skillError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{skillError}</div>
+            )}
+
+            {skillResult ? (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-emerald-800">Skill 生成完成</div>
+                    <div className="text-xs text-emerald-600 mt-0.5">
+                      {skillResult.file_count} 个文件，可直接下载 ZIP 包
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => downloadSkillZip(batchId)}
+                    className="btn-primary text-sm"
+                  >
+                    <Icon name="download" size={16} />
+                    下载 ZIP
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleGenerateSkill}
+                  disabled={skillGenerating || !skillDomain.trim()}
+                  className="btn-primary text-sm"
+                >
+                  {skillGenerating ? (
+                    <>
+                      <span className="animate-spin inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
+                      生成中...
+                    </>
+                  ) : (
+                    <>
+                      <Icon name="sparkles" size={16} />
+                      生成 Skill
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="sticky bottom-0 z-20 bg-white/90 backdrop-blur-sm border border-air-border rounded-card shadow-popover px-6 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">

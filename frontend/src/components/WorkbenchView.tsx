@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createBatch,
   fetchBatch,
-  fetchBatchProgress,
   fetchConfig,
   previewClassify,
+  subscribeBatchProgress,
   updateConfig,
 } from '../api';
-import type { Batch, BatchProgress, Config, CreateBatchMeta, PreviewClassifyResponse } from '../api';
+import type { BatchProgress, Config, CreateBatchMeta, PreviewClassifyResponse } from '../api';
 import PipelineProgress from './PipelineProgress';
 
 const SOURCE_CATEGORIES = [
@@ -61,11 +61,7 @@ interface UploadedFile {
   autoClass?: PreviewClassifyResponse | null;
 }
 
-interface WorkbenchViewProps {
-  selectedBatch: Batch | null;
-  onBatchUpdated: (batch: Batch) => void;
-  onRefresh: () => void;
-}
+import { useApp } from '../context/AppContext';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -126,7 +122,9 @@ function DocumentProfileSummary({ profile }: { profile?: PreviewClassifyResponse
   );
 }
 
-export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh }: WorkbenchViewProps) {
+export default function WorkbenchView() {
+  const { state, batchUpdated, refresh: onRefresh } = useApp();
+  const { selectedBatch } = state;
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -160,31 +158,22 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
     const batchId = currentBatchId || selectedBatch?.batch_id;
     if (!batchId || progressDone(selectedBatch?.status)) return;
 
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const next = await fetchBatchProgress(batchId);
-        if (cancelled) return;
-        setProgress(next);
-        if (progressDone(next.status)) {
+    const cleanup = subscribeBatchProgress(
+      batchId,
+      (next) => setProgress(next),
+      async () => {
+        try {
           const detail = await fetchBatch(batchId);
-          if (!cancelled) {
-            onBatchUpdated(detail);
-            onRefresh();
-          }
+          batchUpdated(detail);
+          onRefresh();
+        } catch {
+          // ignore — batch detail will be fetched on next interaction
         }
-      } catch {
-        // Keep the last visible state; transient polling failures are common during startup.
-      }
-    };
+      },
+    );
 
-    poll();
-    const timer = window.setInterval(poll, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [currentBatchId, onBatchUpdated, onRefresh, selectedBatch?.batch_id, selectedBatch?.status]);
+    return cleanup;
+  }, [currentBatchId, batchUpdated, onRefresh, selectedBatch?.batch_id, selectedBatch?.status]);
 
   const updateFileMeta = useCallback((id: string, update: Partial<CreateBatchMeta>) => {
     setFiles((prev) =>
@@ -293,14 +282,14 @@ export default function WorkbenchView({ selectedBatch, onBatchUpdated, onRefresh
       const created = await createBatch(files.map((item) => item.file), meta);
       setCurrentBatchId(created.batch_id);
       const detail = await fetchBatch(created.batch_id);
-      onBatchUpdated(detail);
+      batchUpdated(detail);
       onRefresh();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : '启动失败');
     } finally {
       setSubmitting(false);
     }
-  }, [canStart, config, configDirty, files, onBatchUpdated, onRefresh, scopeDescription, taskMode]);
+  }, [canStart, config, configDirty, files, batchUpdated, onRefresh, scopeDescription, taskMode]);
 
   const updateExtraction = useCallback((field: 'industry_preset' | 'granularity' | 'regulation_depth', value: string | null) => {
     setConfig((prev) =>
