@@ -133,12 +133,14 @@ def _classify_one(
     # Use new classifier for genre + authority + tags
     clf = classify_document_sync(filename, text)
 
-    # Also get legacy profile for topic info
+    # Also get legacy profile for more specific sub-type
     profile = profile_document(filename, text)
     topic = str(profile.get("primary_legal_topic", ""))
+    doc_type = str(profile.get("document_type", ""))
 
-    # Resolve category: prefer new genre, fall back to legacy
-    category_dir = _resolve_category(clf.document_genre, clf.source_tag)
+    # Resolve category: try profile doc_type first (more specific sub-dir),
+    # then genre, then source_tag
+    category_dir = _resolve_category_with_subtype(clf.document_genre, doc_type, clf.source_tag)
     target_name = _clean_filename(filename)
 
     return FileClassification(
@@ -178,6 +180,43 @@ def _resolve_category(doc_type: str, source_tag: str) -> str:
     if source_tag and source_tag in _CATEGORY_MAP:
         top, sub = _CATEGORY_MAP[source_tag]
         return f"{top}/{sub}"
+    return "其他/未分类"
+
+
+def _resolve_category_with_subtype(genre: str, profile_doc_type: str, source_tag: str) -> str:
+    """Use profile's specific document_type for the sub-directory when possible.
+
+    Strategy:
+        1. If profile_doc_type has a specific mapping → use it (most specific)
+        2. Else if genre has a mapping and sub != '综合' → use it
+        3. Else derive sub-dir from source_tag or profile_doc_type text
+        4. Last resort: genre/综合
+    """
+    # Step 1: profile_doc_type gives the most specific sub-directory
+    if profile_doc_type and profile_doc_type in _CATEGORY_MAP:
+        top, sub = _CATEGORY_MAP[profile_doc_type]
+        return f"{top}/{sub}"
+
+    # Step 2: genre mapping
+    if genre and genre in _CATEGORY_MAP:
+        top, sub = _CATEGORY_MAP[genre]
+        if sub != "综合":
+            return f"{top}/{sub}"
+        # sub is "综合" — try to derive a better sub-dir
+        # Use profile_doc_type as sub-dir name if it's meaningful
+        if profile_doc_type and profile_doc_type not in ("未识别", "合同文本", ""):
+            return f"{top}/{profile_doc_type}"
+
+    # Step 3: source_tag fallback
+    if source_tag and source_tag in _CATEGORY_MAP:
+        top, sub = _CATEGORY_MAP[source_tag]
+        return f"{top}/{sub}"
+
+    # Step 4: last resort
+    if genre and genre in _CATEGORY_MAP:
+        top, _ = _CATEGORY_MAP[genre]
+        return f"{top}/其他"
+
     return "其他/未分类"
 
 

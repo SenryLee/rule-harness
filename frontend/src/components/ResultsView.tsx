@@ -311,103 +311,93 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
         </div>
       </div>
 
-      {/* ── Skill Generation Panel ── */}
-      <div className="card overflow-hidden mb-6">
-        <button
-          type="button"
-          onClick={() => setSkillPanelOpen((o) => !o)}
-          className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-[var(--bg-hover)] transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 text-white flex items-center justify-center shadow-sm">
-              <Icon name="sparkles" size={18} />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-gray-900">生成 Skill 压缩包</div>
-              <div className="text-xs text-gray-400 mt-0.5">
-                将本批次规则打包为可下载的法务 AI 平台 Skill（.zip）
+      {/* ── Skill Generation Modal ── */}
+      {skillPanelOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setSkillPanelOpen(false)} />
+          <div className="relative w-[520px] bg-white rounded-xl shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 text-white flex items-center justify-center">
+                  <Icon name="sparkles" size={18} />
+                </div>
+                <div>
+                  <div className="text-base font-semibold text-gray-900">生成 Skill 压缩包</div>
+                  <div className="text-xs text-gray-400">打包为可部署的法务 AI 平台 Skill</div>
+                </div>
               </div>
-            </div>
-          </div>
-          <Icon name="chevron-right" size={16} className={`text-gray-400 transition-transform ${skillPanelOpen ? 'rotate-90' : ''}`} />
-        </button>
-
-        {skillPanelOpen && (
-          <div className="px-5 pb-5 border-t border-[var(--border)] pt-4 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="text-xs text-gray-500">
-                合同领域名称 *
-                <input
-                  type="text"
-                  value={skillDomain}
-                  onChange={(e) => setSkillDomain(e.target.value)}
-                  placeholder="例如：采购合同、股权转让协议"
-                  className="input-field text-sm"
-                />
-              </label>
-              <label className="text-xs text-gray-500">
-                主体立场（逗号分隔）
-                <input
-                  type="text"
-                  value={skillParties.join(', ')}
-                  onChange={(e) => setSkillParties(e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean))}
-                  placeholder="甲方, 乙方"
-                  className="input-field text-sm"
-                />
-              </label>
-            </div>
-            <div className="flex items-center gap-6">
-              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={skillDrafting}
-                  onChange={(e) => setSkillDrafting(e.target.checked)}
-                  className="rounded border-gray-300 text-primary focus:ring-primary/30"
-                />
-                包含起草模式
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={skillLlm}
-                  onChange={(e) => setSkillLlm(e.target.checked)}
-                  className="rounded border-gray-300 text-primary focus:ring-primary/30"
-                />
-                <Icon name="sparkles" size={14} className="text-amber-500" />
-                LLM 增强（优化术语表和描述）
-              </label>
+              <button type="button" onClick={() => setSkillPanelOpen(false)} className="btn-ghost p-1">
+                <Icon name="close" size={18} />
+              </button>
             </div>
 
-            {skillError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{skillError}</div>
-            )}
-
-            {skillResult ? (
-              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-emerald-800">Skill 生成完成</div>
-                    <div className="text-xs text-emerald-600 mt-0.5">
-                      {skillResult.file_count} 个文件，可直接下载 ZIP 包
-                    </div>
+            <div className="px-6 py-5 space-y-4">
+              {skillResult ? (
+                <div className="p-5 bg-emerald-50 border border-emerald-200 rounded-lg text-center">
+                  <div className="w-12 h-12 mx-auto rounded-full bg-emerald-500 text-white flex items-center justify-center mb-3">
+                    <Icon name="check" size={24} />
                   </div>
+                  <div className="text-base font-semibold text-emerald-800">生成完成</div>
+                  <div className="text-sm text-emerald-600 mt-1">{skillResult.file_count} 个文件已打包</div>
                   <button
                     type="button"
                     onClick={() => downloadSkillZip(batchId)}
-                    className="btn-primary text-sm"
+                    className="mt-4 inline-flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-emerald-700 transition-colors"
                   >
                     <Icon name="download" size={16} />
-                    下载 ZIP
+                    下载 ZIP 压缩包
                   </button>
                 </div>
-              </div>
-            ) : (
-              <div className="flex justify-end">
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-4">
+                    <label className="text-xs text-gray-500">
+                      合同领域名称 *
+                      <input
+                        autoFocus
+                        type="text"
+                        value={skillDomain}
+                        onChange={(e) => setSkillDomain(e.target.value)}
+                        placeholder="例如：采购合同、股权转让协议、赠与合同"
+                        className="input-field text-sm"
+                      />
+                    </label>
+                    <label className="text-xs text-gray-500">
+                      主体立场（逗号分隔）
+                      <input
+                        type="text"
+                        value={skillParties.join(', ')}
+                        onChange={(e) => setSkillParties(e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean))}
+                        placeholder="甲方, 乙方"
+                        className="input-field text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-5">
+                    <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                      <input type="checkbox" checked={skillDrafting} onChange={(e) => setSkillDrafting(e.target.checked)} className="rounded border-gray-300 text-primary focus:ring-primary/30" />
+                      包含起草模式
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                      <input type="checkbox" checked={skillLlm} onChange={(e) => setSkillLlm(e.target.checked)} className="rounded border-gray-300 text-primary focus:ring-primary/30" />
+                      <Icon name="sparkles" size={14} className="text-amber-500" />
+                      LLM 增强
+                    </label>
+                  </div>
+                  {skillError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{skillError}</div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {!skillResult && (
+              <div className="px-6 py-4 border-t border-[var(--border)] bg-gray-50/50 flex justify-end">
                 <button
                   type="button"
                   onClick={handleGenerateSkill}
                   disabled={skillGenerating || !skillDomain.trim()}
-                  className="btn-primary text-sm"
+                  className="inline-flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-5 py-2.5 rounded-lg font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all disabled:opacity-40"
                 >
                   {skillGenerating ? (
                     <>
@@ -417,15 +407,15 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
                   ) : (
                     <>
                       <Icon name="sparkles" size={16} />
-                      生成 Skill
+                      生成并打包
                     </>
                   )}
                 </button>
               </div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="sticky bottom-0 z-20 bg-white/90 backdrop-blur-sm border border-air-border rounded-card shadow-popover px-6 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">

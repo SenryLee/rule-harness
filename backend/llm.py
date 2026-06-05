@@ -102,7 +102,7 @@ class DeepSeekProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 4000,
         response_format: str | None = None,
-        timeout: int = 60,
+        timeout: int = 90,
     ) -> LLMResponse:
         import aiohttp
 
@@ -110,7 +110,7 @@ class DeepSeekProvider(LLMProvider):
         headers = self._headers()
 
         url = f"{self.base_url}/chat/completions"
-        max_retries = 4
+        max_retries = 5
 
         async with self._rpm_semaphore:
             for attempt in range(max_retries):
