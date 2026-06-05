@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .classifier import classify_document_sync, classification_to_dict as clf_to_dict
 from .config import Config, PROJECT_ROOT
 from .document_profile import profile_document
 from .llm import LLMRouter, create_llm_router
@@ -32,27 +33,34 @@ ARCHIVE_ROOT = PROJECT_ROOT / "data" / "archived"
 # Falls back to "其他/未分类" when nothing matches.
 
 _CATEGORY_MAP: dict[str, tuple[str, str]] = {
-    # document_profile document_type mappings
+    # ── New classifier genre mappings (primary) ──
+    "法律法规":           ("法律法规", "综合"),
+    "监管与司法文件":     ("监管与司法文件", "综合"),
+    "裁判文书":           ("裁判文书与案例", "裁判文书"),
+    "合同文本":           ("合同文本", "通用合同"),
+    "企业内部文件":       ("内部制度", "综合"),
+    "已有规则库":         ("已有规则", "规则库"),
+    "专业参考资料":       ("专业参考资料", "综合"),
+    # ── document_profile document_type mappings (fallback) ──
     "国家法律":            ("法律法规", "国家法律"),
     "司法解释":            ("法律法规", "司法解释"),
-    "部门规章/监管通知":   ("法律法规", "部门规章"),
-    "地方红头文件":        ("法律法规", "地方文件"),
-    "地方司法裁判指引":    ("裁判文书与案例", "司法指引"),
-    "司法问答/解释性材料":  ("法律法规", "司法问答"),
+    "部门规章/监管通知":   ("监管与司法文件", "部门规章"),
+    "地方红头文件":        ("监管与司法文件", "地方文件"),
+    "地方司法裁判指引":    ("监管与司法文件", "司法指引"),
+    "司法问答/解释性材料":  ("监管与司法文件", "司法问答"),
     "已有规则CSV":         ("已有规则", "规则库"),
     "股权转让合同":        ("合同文本", "股权转让"),
-    "合同文本":            ("合同文本", "通用合同"),
-    # preview source_tag mappings (fallback)
+    # ── Legacy source_tag mappings (fallback) ──
     "法规":       ("法律法规", "综合"),
     "公司红线":   ("内部制度", "公司红线"),
     "内部制度":   ("内部制度", "管理制度"),
     "标准条款库": ("内部制度", "标准条款"),
     "合同模板":   ("合同文本", "模板"),
     "历史合同":   ("合同文本", "历史合同"),
-    "业务规范":   ("内部制度", "业务规范"),
+    "业务规范":   ("专业参考资料", "业务规范"),
     "案例":       ("裁判文书与案例", "案例"),
     "审查清单":   ("已有规则", "审查清单"),
-    "行业特殊":   ("行业资料", "特殊资料"),
+    "行业特殊":   ("专业参考资料", "行业资料"),
 }
 
 
@@ -119,31 +127,29 @@ def _classify_one(
     content: bytes,
     file_size: int,
 ) -> FileClassification:
-    """Rule-based classification for a single file."""
+    """Classification using the new classifier (keyword pre-screen)."""
     text = extract_preview_text(filename, content, limit=3000)
-    preview = preview_classify_text(filename, text)
-    profile = preview.get("document_profile", {})
 
-    doc_type = str(profile.get("document_type", ""))
-    authority = str(profile.get("authority_level", ""))
+    # Use new classifier for genre + authority + tags
+    clf = classify_document_sync(filename, text)
+
+    # Also get legacy profile for topic info
+    profile = profile_document(filename, text)
     topic = str(profile.get("primary_legal_topic", ""))
-    source_tag = str(preview.get("suggested_source_tag", "历史合同"))
-    confidence = float(profile.get("confidence", 0.0))
-    evidence = list(profile.get("evidence", []))
 
-    # Resolve category: prefer document_type (more specific), fall back to source_tag
-    category_dir = _resolve_category(doc_type, source_tag)
+    # Resolve category: prefer new genre, fall back to legacy
+    category_dir = _resolve_category(clf.document_genre, clf.source_tag)
     target_name = _clean_filename(filename)
 
     return FileClassification(
         original_name=filename,
         file_size=file_size,
-        document_type=doc_type or "未识别",
-        authority_level=authority or "未识别",
+        document_type=clf.document_genre,
+        authority_level=clf.authority_level,
         primary_topic=topic or "通用",
-        source_tag=source_tag,
-        confidence=confidence,
-        evidence=evidence,
+        source_tag=clf.source_tag,
+        confidence=clf.confidence,
+        evidence=clf.evidence,
         category_dir=category_dir,
         target_filename=target_name,
     )
@@ -187,79 +193,43 @@ def _clean_filename(filename: str) -> str:
 
 # ── LLM Enhancement ────────────────────────────────────────────────
 
-_LLM_CLASSIFY_SYSTEM = """你是一个法律文档分类专家。根据文件名和正文摘要，判断文件属于以下哪个类别：
-
-可选类别：
-- 法律法规/国家法律
-- 法律法规/司法解释
-- 法律法规/部门规章
-- 法律法规/地方文件
-- 法律法规/司法问答
-- 裁判文书与案例/司法指引
-- 裁判文书与案例/案例
-- 合同文本/模板
-- 合同文本/历史合同
-- 合同文本/股权转让
-- 合同文本/通用合同
-- 内部制度/公司红线
-- 内部制度/管理制度
-- 内部制度/标准条款
-- 内部制度/业务规范
-- 已有规则/规则库
-- 已有规则/审查清单
-- 行业资料/特殊资料
-- 其他/未分类
-
-返回 JSON：
-{
-  "category": "选中的类别路径",
-  "confidence": 0.0-1.0,
-  "summary": "一句话说明文件内容",
-  "reasoning": "分类依据"
-}"""
-
-
 async def enhance_with_llm(
     classifications: list[FileClassification],
     file_contents: dict[str, bytes],
     cfg: Config,
-    confidence_threshold: float = 0.5,
+    confidence_threshold: float = 0.6,
 ) -> list[FileClassification]:
-    """Use LLM to re-classify files whose rule-based confidence is below threshold."""
+    """Use LLM to classify ALL files (default behavior).
+
+    Files above threshold keep their LLM result directly.
+    Files below threshold also get LLM classification but are flagged.
+    """
+    from .classifier import classify_document, merge_results, prescreen
+
     router = create_llm_router(cfg)
     enhanced: list[FileClassification] = []
 
     for item in classifications:
-        if item.confidence >= confidence_threshold:
-            enhanced.append(item)
-            continue
-
         content = file_contents.get(item.original_name, b"")
-        text = extract_preview_text(item.original_name, content, limit=2000)
-        user_msg = f"文件名: {item.original_name}\n\n正文摘要（前2000字）:\n{text[:2000]}"
+        text = extract_preview_text(item.original_name, content, limit=3000)
 
         try:
-            result = await router.chat_json(
-                system=_LLM_CLASSIFY_SYSTEM,
-                user=user_msg,
-                temperature=0.1,
-            )
-            llm_cat = str(result.get("category", ""))
-            llm_conf = float(result.get("confidence", 0.0))
-            llm_summary = str(result.get("summary", ""))
+            clf = await classify_document(item.original_name, text, router=router)
 
-            # Accept LLM result if it's more confident than rule-based
-            if llm_conf > item.confidence and llm_cat:
-                item.category_dir = llm_cat
-                item.confidence = max(item.confidence, llm_conf * 0.85)
-                item.evidence.append(f"LLM增强: {result.get('reasoning', '')}")
-
+            # Update with LLM-enhanced results
+            new_category = _resolve_category(clf.document_genre, clf.source_tag)
+            item.document_type = clf.document_genre
+            item.authority_level = clf.authority_level
+            item.source_tag = clf.source_tag
+            item.confidence = clf.confidence
+            item.category_dir = new_category
+            item.evidence = clf.evidence
             item.llm_enhanced = True
-            item.llm_category = llm_cat
-            item.llm_summary = llm_summary
-            item.llm_confidence = llm_conf
+            item.llm_category = clf.document_genre
+            item.llm_summary = clf.reasoning
+            item.llm_confidence = clf.confidence
         except Exception as exc:
-            logger.warning("LLM enhancement failed for %s: %s", item.original_name, exc)
+            logger.warning("LLM classification failed for %s: %s", item.original_name, exc)
             item.llm_enhanced = False
 
         enhanced.append(item)

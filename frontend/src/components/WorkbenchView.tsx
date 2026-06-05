@@ -10,25 +10,18 @@ import {
 import type { BatchProgress, Config, CreateBatchMeta, PreviewClassifyResponse } from '../api';
 import PipelineProgress from './PipelineProgress';
 
-const CONTRACT_TYPES = [
-  '建工·总包',
-  '建工·勘察设计',
-  '房地产',
-  '金融',
-  '医药',
-  'IT',
-  '制造',
-  '能源·电力',
-  '汽车',
-  '通用商事',
-  '采购',
-  '销售',
-  '服务',
-  '保密',
-  '技术',
-  '许可',
-  '租赁',
-  '劳动',
+const EXTRACTION_DOMAINS = [
+  { value: '', label: '自动识别', desc: '系统从文件内容推断领域' },
+  { value: '通用商事', label: '通用商事', desc: '买卖、采购、销售、服务、代理等' },
+  { value: '建工', label: '建设工程', desc: '总包、勘察设计、施工、监理' },
+  { value: '房地产', label: '房地产', desc: '商品房、物业、租赁、不动产' },
+  { value: '金融', label: '金融', desc: '银行、证券、保险、资管、基金' },
+  { value: '医药', label: '医药', desc: '药品、器械、临床、GMP' },
+  { value: 'IT', label: '信息技术', desc: '软件、SaaS、数据、网络安全' },
+  { value: '制造', label: '制造', desc: '设备、模具、质检、生产线' },
+  { value: '能源·电力', label: '能源电力', desc: '光伏、风电、储能、购售电' },
+  { value: '股权投资', label: '股权投资', desc: '股权转让、增资、并购、对赌' },
+  { value: '劳动人事', label: '劳动人事', desc: '劳动合同、竞业限制、社保' },
 ];
 
 const PARTY_OPTIONS = ['通用', '甲方', '乙方', '发包人', '承包人', '买方', '卖方', '出租人', '承租人'];
@@ -83,6 +76,7 @@ export default function WorkbenchView() {
   const [configDirty, setConfigDirty] = useState(false);
   const [batchConfigOpen, setBatchConfigOpen] = useState(false);
   const [taskMode, setTaskMode] = useState<CreateBatchMeta['task_mode']>('full_library');
+  const [extractionDomain, setExtractionDomain] = useState('');
   const [scopeDescription, setScopeDescription] = useState('');
   const idCounter = useRef(0);
 
@@ -216,17 +210,29 @@ export default function WorkbenchView() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      if (config && configDirty) {
+      // Sync extraction domain to config
+      if (config) {
+        const updatedConfig = {
+          ...config,
+          extraction: { ...config.extraction, industry_preset: extractionDomain || null },
+        };
+        await updateConfig(updatedConfig);
+      } else if (config && configDirty) {
         await updateConfig(config);
       }
-      const meta = files.map((item) => ({
-        ...item.meta,
-        contract_types: item.meta.contract_types || [],
-        is_redline: item.meta.source_tag === '公司红线',
-        is_case: item.meta.source_tag === '案例',
-        task_mode: taskMode,
-        scope_description: scopeDescription.trim(),
-      }));
+      // Use classifier results for source_tag, fallback to auto-detected
+      const meta = files.map((item) => {
+        const clf = item.autoClass?.classification;
+        return {
+          ...item.meta,
+          source_tag: clf?.source_tag || item.meta.source_tag || '历史合同',
+          contract_types: extractionDomain ? [extractionDomain] : (item.meta.contract_types || []),
+          is_redline: clf?.is_redline || false,
+          is_case: clf?.is_case || false,
+          task_mode: taskMode,
+          scope_description: scopeDescription.trim(),
+        };
+      });
       const created = await createBatch(files.map((item) => item.file), meta);
       setCurrentBatchId(created.batch_id);
       const detail = await fetchBatch(created.batch_id);
@@ -379,59 +385,52 @@ export default function WorkbenchView() {
                       ) : null}
                     </div>
                     {/* Manual overrides (collapsed by default, expandable) */}
-                    <details className="mt-2">
-                      <summary className="text-[11px] text-gray-400 cursor-pointer hover:text-gray-600">手动调整</summary>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
-                        <label className="text-xs text-gray-500">
-                          合同类型
-                          <select
-                            value={item.meta.contract_types[0] || ''}
-                            onChange={(event) =>
-                              updateFileMeta(item.id, {
-                                contract_types: event.target.value ? [event.target.value] : [],
-                              })
-                            }
-                            className="select-field text-xs"
-                          >
-                            <option value="">自动识别</option>
-                            {CONTRACT_TYPES.map((contractType) => (
-                              <option key={contractType} value={contractType}>
-                                {contractType}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="text-xs text-gray-500">
-                          我方立场
-                          <select
-                            value={item.meta.our_party || '通用'}
-                            onChange={(event) => updateFileMeta(item.id, { our_party: event.target.value })}
-                            className="select-field text-xs"
-                          >
-                            {PARTY_OPTIONS.map((party) => (
-                              <option key={party} value={party}>
-                                {party}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="flex items-end gap-2 text-xs text-gray-600 pb-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={!!item.meta.is_scanned}
-                            onChange={(event) => updateFileMeta(item.id, { is_scanned: event.target.checked })}
-                            className="rounded border-gray-300 text-primary focus:ring-primary/30"
-                          />
-                          是否扫描件
-                        </label>
-                      </div>
-                    </details>
+                    {/* Scanned file toggle */}
+                    {item.autoClass && !item.autoClass.classification?.feature_tags && (
+                      <label className="mt-2 flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!item.meta.is_scanned}
+                          onChange={(event) => updateFileMeta(item.id, { is_scanned: event.target.checked })}
+                          className="rounded border-gray-300 text-primary focus:ring-primary/30 w-3.5 h-3.5"
+                        />
+                        标记为扫描件
+                      </label>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </section>
 
+          {/* Batch-level domain selector — prominent position */}
+          {files.length > 0 && (
+            <section className="card p-5">
+              <div className="text-sm font-semibold text-gray-900 mb-3">提取领域</div>
+              <div className="text-xs text-gray-400 mb-3">选择本批次资料要提取的规则领域，系统会加载对应的行业词表和关注要点。</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {EXTRACTION_DOMAINS.map((domain) => (
+                  <button
+                    key={domain.value}
+                    type="button"
+                    onClick={() => setExtractionDomain(domain.value)}
+                    className={`text-left px-3 py-2.5 rounded-lg border transition-all ${
+                      extractionDomain === domain.value
+                        ? 'border-primary bg-primary-soft ring-1 ring-primary/20'
+                        : 'border-air-border hover:border-air-border-accent hover:bg-air-hover'
+                    }`}
+                  >
+                    <div className={`text-sm font-medium ${extractionDomain === domain.value ? 'text-primary' : 'text-gray-700'}`}>
+                      {domain.label}
+                    </div>
+                    <div className="text-[11px] text-gray-400 mt-0.5 truncate">{domain.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Advanced config (collapsed) */}
           <section className="card overflow-hidden">
             <button
               type="button"
@@ -439,9 +438,9 @@ export default function WorkbenchView() {
               className="w-full px-5 py-3 flex items-center justify-between text-left"
             >
               <div>
-                <div className="text-sm font-semibold text-gray-900">批次配置</div>
+                <div className="text-sm font-semibold text-gray-900">高级配置</div>
                 <div className="text-xs text-gray-400 mt-0.5">
-                  模式: {TASK_MODES.find((mode) => mode.value === taskMode)?.label || '全量规则沉淀'} ｜ 行业预设: {config?.extraction.industry_preset || '通用'} ｜ 颗粒度: {config?.extraction.granularity || '-'} ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
+                  模式: {TASK_MODES.find((mode) => mode.value === taskMode)?.label || '全量规则沉淀'} ｜ 颗粒度: {config?.extraction.granularity || '-'} ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
                 </div>
               </div>
               <span className="text-sm text-primary">{batchConfigOpen ? '收起' : '展开'}</span>
@@ -458,21 +457,6 @@ export default function WorkbenchView() {
                     {TASK_MODES.map((mode) => (
                       <option key={mode.value} value={mode.value}>
                         {mode.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-gray-500">
-                  行业预设
-                  <select
-                    value={config.extraction.industry_preset || ''}
-                    onChange={(event) => updateExtraction('industry_preset', event.target.value || null)}
-                    className="select-field text-xs"
-                  >
-                    <option value="">通用</option>
-                    {CONTRACT_TYPES.slice(0, 10).map((name) => (
-                      <option key={name} value={name}>
-                        {name}
                       </option>
                     ))}
                   </select>
@@ -499,7 +483,21 @@ export default function WorkbenchView() {
                     <option value="limited">摘要要点</option>
                   </select>
                 </label>
-                <label className="text-xs text-gray-500 md:col-span-3">
+                <label className="text-xs text-gray-500">
+                  我方立场
+                  <select
+                    value={files[0]?.meta.our_party || '通用'}
+                    onChange={(event) => files.forEach((f) => updateFileMeta(f.id, { our_party: event.target.value }))}
+                    className="select-field text-xs"
+                  >
+                    {PARTY_OPTIONS.map((party) => (
+                      <option key={party} value={party}>
+                        {party}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-gray-500 md:col-span-2">
                   范围说明
                   <textarea
                     value={scopeDescription}

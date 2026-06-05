@@ -68,16 +68,17 @@ async def classify_uploaded_files(
     # Rule-based classification
     classifications = classify_files(saved_paths, file_contents)
 
-    # Optional LLM enhancement for low-confidence files
-    enable_llm = use_llm.lower() in {"true", "1", "yes"}
-    if enable_llm:
+    # LLM classification is ON by default; user can opt out with use_llm=false
+    skip_llm = use_llm.lower() in {"false", "0", "no"}
+    if not skip_llm:
         try:
             cfg = load_config()
-            classifications = await enhance_with_llm(
-                classifications, file_contents, cfg
-            )
+            if cfg.models.primary.api_key:
+                classifications = await enhance_with_llm(
+                    classifications, file_contents, cfg
+                )
         except Exception as exc:
-            logger.warning("LLM enhancement failed: %s", exc)
+            logger.warning("LLM classification failed, using keyword-only: %s", exc)
 
     # Store pending state
     _pending[session_id] = {
