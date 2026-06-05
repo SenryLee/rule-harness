@@ -442,9 +442,30 @@ export default function ResultsView({ batchId, refreshKey }: ResultsViewProps) {
           <ExportButton label="冲突HTML" onClick={() => downloadExport(batchId, 'conflict-report')} />
           <ExportButton label="变更集CSV" onClick={() => downloadExport(batchId, 'change-set')} />
         </div>
-        <button type="button" onClick={handleApplyMerge} disabled={applying} className="btn-primary text-sm">
-          {applying ? '合并中...' : '应用变更入库'}
-        </button>
+        <div className="flex items-center gap-2">
+          {skillResult ? (
+            <button
+              type="button"
+              onClick={() => downloadSkillZip(batchId)}
+              className="inline-flex items-center gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-4 py-2 rounded-btn font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all text-sm shadow-sm"
+            >
+              <Icon name="download" size={15} />
+              下载 Skill ZIP
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSkillPanelOpen((o) => !o)}
+              className="inline-flex items-center gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white px-4 py-2 rounded-btn font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all text-sm shadow-sm"
+            >
+              <Icon name="sparkles" size={15} />
+              生成 Skill
+            </button>
+          )}
+          <button type="button" onClick={handleApplyMerge} disabled={applying} className="btn-primary text-sm">
+            {applying ? '合并中...' : '应用变更入库'}
+          </button>
+        </div>
       </div>
 
       {selectedRule && <DetailDrawer rule={selectedRule} onClose={() => setSelectedRule(null)} />}

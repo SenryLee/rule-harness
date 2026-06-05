@@ -375,7 +375,27 @@ export interface PreviewClassifyResponse {
   suggested_is_case?: boolean;
   suggested_is_redline?: boolean;
   document_profile?: DocumentProfile;
+  classification?: DocumentClassification;
   evidence: string[];
+}
+
+export interface DocumentClassification {
+  document_genre: string;
+  authority_level: string;
+  confidence: number;
+  feature_tags: {
+    is_redline: boolean;
+    is_case: boolean;
+    is_template: boolean;
+    has_rules: boolean;
+  };
+  industry_hints: string[];
+  reasoning: string;
+  evidence: string[];
+  source_tag: string;
+  source_priority: number;
+  is_redline: boolean;
+  is_case: boolean;
 }
 
 export interface DocumentProfile {

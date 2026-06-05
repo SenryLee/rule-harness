@@ -21,7 +21,7 @@ from ..orchestrator import (
     decision_to_api_dict,
     run_batch,
 )
-from ..preview import preview_classify_bytes
+from ..preview import preview_classify_bytes, preview_classify_with_llm
 from ..skill_builder import SkillConfig, build_skill_zip, built_skill_to_dict
 from .. import state
 
@@ -53,8 +53,18 @@ def _exports_dir(batch_id: str) -> Path:
 
 @router.post("/preview-classify")
 async def preview_classify(file: UploadFile = File(...)):
+    """Classify a file using LLM by default, fallback to keyword-only."""
     content = await file.read()
-    return preview_classify_bytes(file.filename or "upload", content)
+    filename = file.filename or "upload"
+    try:
+        cfg = load_config()
+        if cfg.models.primary.api_key:
+            from ..llm import create_llm_router
+            router = create_llm_router(cfg)
+            return await preview_classify_with_llm(filename, content, router)
+    except Exception:
+        logger.debug("LLM classify unavailable, falling back to keyword-only")
+    return preview_classify_bytes(filename, content)
 
 
 # ---- Batch CRUD ----

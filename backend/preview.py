@@ -124,40 +124,85 @@ def preview_classify_bytes(filename: str, content: bytes) -> dict[str, Any]:
     return preview_classify_text(filename, text)
 
 
-def preview_classify_text(filename: str, text: str) -> dict[str, Any]:
-    source_tag, source_evidence, source_confidence = _classify_source(filename, text)
+async def preview_classify_with_llm(filename: str, content: bytes, router: object) -> dict[str, Any]:
+    """Full classification: keyword pre-screen + LLM (default path)."""
+    from backend.classifier import classify_document, classification_to_dict
+
+    text = extract_preview_text(filename, content)
+    result = await classify_document(filename, text, router=router)
+
+    # Also run legacy profile/contract/party detection for extra context
     contract_types, type_evidence, contract_confidence = _classify_profiles(filename, text)
     our_party, party_evidence, party_confidence = _classify_party(f"{filename}\n{text}")
     document_profile = profile_document(filename, text)
 
-    confidence = max(
-        0.2,
-        min(0.98, source_confidence * 0.35 + contract_confidence * 0.55 + party_confidence * 0.1),
-    )
-    auto_apply_source = source_confidence >= _SOURCE_AUTO_THRESHOLD
+    auto_apply_source = result.confidence >= _SOURCE_AUTO_THRESHOLD
     auto_apply_contract = bool(contract_types) and contract_confidence >= _CONTRACT_AUTO_THRESHOLD
     auto_apply_party = party_confidence >= _PARTY_AUTO_THRESHOLD
-    evidence = [source_evidence, *type_evidence[:3]]
+
+    evidence = list(result.evidence)
+    evidence.extend(type_evidence[:2])
     if party_evidence:
         evidence.append(party_evidence)
 
     return {
         "filename": filename,
-        "suggested_source_tag": source_tag,
+        "suggested_source_tag": result.source_tag,
         "suggested_contract_types": contract_types,
         "suggested_our_party": our_party,
-        "confidence": round(confidence, 2),
-        "source_confidence": round(source_confidence, 2),
+        "confidence": round(result.confidence, 2),
+        "source_confidence": round(result.confidence, 2),
         "contract_confidence": round(contract_confidence, 2),
         "party_confidence": round(party_confidence, 2),
-        "auto_apply": auto_apply_source and (not contract_types or auto_apply_contract),
+        "auto_apply": True,
+        "auto_apply_source": True,
+        "auto_apply_contract": auto_apply_contract,
+        "auto_apply_party": auto_apply_party,
+        "suggested_is_case": result.is_case,
+        "suggested_is_redline": result.is_redline,
+        "evidence": evidence,
+        "document_profile": document_profile,
+        # New classification fields
+        "classification": classification_to_dict(result),
+    }
+
+
+def preview_classify_text(filename: str, text: str) -> dict[str, Any]:
+    """Sync classification: keyword pre-screen only (fallback when no LLM)."""
+    from backend.classifier import classify_document_sync, classification_to_dict
+
+    clf = classify_document_sync(filename, text)
+    contract_types, type_evidence, contract_confidence = _classify_profiles(filename, text)
+    our_party, party_evidence, party_confidence = _classify_party(f"{filename}\n{text}")
+    document_profile = profile_document(filename, text)
+
+    auto_apply_source = clf.confidence >= _SOURCE_AUTO_THRESHOLD
+    auto_apply_contract = bool(contract_types) and contract_confidence >= _CONTRACT_AUTO_THRESHOLD
+    auto_apply_party = party_confidence >= _PARTY_AUTO_THRESHOLD
+
+    evidence = list(clf.evidence)
+    evidence.extend(type_evidence[:2])
+    if party_evidence:
+        evidence.append(party_evidence)
+
+    return {
+        "filename": filename,
+        "suggested_source_tag": clf.source_tag,
+        "suggested_contract_types": contract_types,
+        "suggested_our_party": our_party,
+        "confidence": round(clf.confidence, 2),
+        "source_confidence": round(clf.confidence, 2),
+        "contract_confidence": round(contract_confidence, 2),
+        "party_confidence": round(party_confidence, 2),
+        "auto_apply": auto_apply_source,
         "auto_apply_source": auto_apply_source,
         "auto_apply_contract": auto_apply_contract,
         "auto_apply_party": auto_apply_party,
-        "suggested_is_case": source_tag == "案例" and auto_apply_source,
-        "suggested_is_redline": source_tag == "公司红线" and auto_apply_source,
+        "suggested_is_case": clf.is_case,
+        "suggested_is_redline": clf.is_redline,
         "evidence": evidence,
         "document_profile": document_profile,
+        "classification": classification_to_dict(clf),
     }
 
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.0.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-3.1.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="react" />
   <img src="https://img.shields.io/badge/fastapi-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" alt="fastapi" />
@@ -24,9 +24,10 @@
 
 | 模块 | 功能 | 状态 |
 |------|------|------|
+| **智能文档分类** | LLM 优先的两阶段分类：7种文档体裁 + 5级权威层级 + 特征标签 | v3.1 新增 |
 | **规则抽取引擎** | 五条并行管道，从合同/法规/裁判文书中抽取结构化规则 | v2.0 稳定 |
-| **文件智能归档** | 上传文件自动识别类型，整理到结构化目录 | v3.0 新增 |
-| **Skill 生成器** | 将抽取的规则组装为完整的法务 AI Skill ZIP 包 | v3.0 新增 |
+| **文件智能归档** | 上传文件自动识别类型，整理到结构化目录 | v3.0 稳定 |
+| **Skill 生成器** | 将抽取的规则组装为完整的法务 AI Skill ZIP 包 | v3.0 稳定 |
 
 ---
 
@@ -78,12 +79,55 @@
 
 ## 三大功能模块
 
+### 0. 智能文档分类 <sub>v3.1</sub>
+
+上传即分类，无需手动选择来源类别。系统自动输出三个维度的分类结果：
+
+```
+拖入文件 → 关键词预筛(0ms) → LLM 精确分类(默认) → 自动映射管道路由
+```
+
+**文档体裁（7 类）**
+
+| 体裁 | 示例 | 管道路由 |
+|------|------|----------|
+| 法律法规 | 民法典、公司法、行政法规 | P1 全文抽取 |
+| 监管与司法文件 | 司法解释、部门规章、监管通知、裁判指引 | P1 全文抽取 |
+| 裁判文书 | 判决书、裁定书、仲裁裁决、案例分析 | P1 + P5 案例反推 |
+| 合同文本 | 已签合同、模板/范本、补充协议 | P1 + P2 批注 + P3 修订 |
+| 企业内部文件 | 制度、红线清单、操作规程、审批流程 | P1 + P4 红线(如适用) |
+| 已有规则库 | CSV 规则表、审查清单、审查手册 | 直通转换 |
+| 专业参考资料 | 法律书籍、论文、行业报告、培训材料 | P1 抽取 |
+
+**权威层级（自动推断，决定冲突优先级）**
+
+| 层级 | 含义 | 优先级 |
+|------|------|--------|
+| L1-国家立法 | 法律、行政法规 | 1（最高） |
+| L2-司法解释与监管 | 司法解释、部门规章、监管通知 | 1 |
+| L3-企业强制 | 公司红线、强制性内部制度 | 2 |
+| L4-企业推荐 | 推荐性制度、标准条款库、合同模板 | 3-4 |
+| L5-实践参考 | 历史合同、裁判文书、书籍 | 5 |
+
+**特征标签（自动检测，驱动管道路由）**
+
+`is_redline`(含红线) · `is_case`(裁判文书) · `is_template`(模板/范本) · `has_rules`(含结构化规则) · `has_comments`(含批注) · `has_revisions`(含修订) · `is_scanned`(扫描件)
+
+**两阶段分类流程**
+
+1. **关键词预筛**（0ms，零 API）— 文件名 + 扩展名 + 正文前 500 字，命中体裁规则库
+2. **LLM 精确分类**（默认启用）— 文件名 + 正文前 2000 字发给 LLM，返回体裁 + 层级 + 标签 + 置信度 + 推理依据
+
+LLM 结果覆盖预筛结果。用户在前端可查看分类结果，必要时手动微调。
+
+---
+
 ### 1. 规则抽取引擎
 
 从法律文件中自动提取结构化审查规则，核心流程：
 
 ```
-上传文件 → 解析(DOCX/PDF/XLSX/TXT) → 五管道并行抽取 → 去重 → 置信度评分 → 合并入库 → 多格式导出
+上传文件 → 智能分类 → 解析(DOCX/PDF/XLSX/TXT) → 五管道并行抽取 → 去重 → 置信度评分 → 合并入库 → 多格式导出
 ```
 
 **五条抽取管道**
@@ -274,13 +318,14 @@ docker run -p 8765:8765 -e PORT=8765 rule-harness
 .
 ├── backend/
 │   ├── app.py                    # FastAPI 入口，路由注册，静态文件挂载
+│   ├── classifier.py             # LLM 优先文档分类（7体裁 + 5层级 + 特征标签）
 │   ├── orchestrator.py           # 批次编排器：解析 → 管道 → 去重 → 导出
 │   ├── archive_engine.py         # 文件归档引擎：分类 + LLM增强 + 目录生成
 │   ├── skill_builder.py          # Skill 组装器：规则 → 六维度 → 场景拆分 → ZIP
 │   ├── llm.py                    # LLM 路由器（主/备切换，速率控制，指数退避）
 │   ├── parsers.py                # 文件解析器（DOCX / PDF / XLSX / TXT）
-│   ├── document_profile.py       # 文档画像（规则式文档类型分类）
-│   ├── preview.py                # 上传预分类（来源 + 合同类型 + 立场）
+│   ├── document_profile.py       # 文档画像（规则式分类，作为预筛层）
+│   ├── preview.py                # 上传分类入口（调用 classifier → 映射管道路由）
 │   ├── dedupe.py                 # 五级来源优先级去重
 │   ├── confidence.py             # 五重门置信度评分
 │   ├── fidelity.py               # 数值忠实度校验门
@@ -367,6 +412,7 @@ docker run -p 8765:8765 -e PORT=8765 rule-harness
 
 | 版本 | 主要变更 |
 |------|----------|
+| **v3.1.0** | LLM 优先文档分类（7体裁 + 5层级 + 特征标签），取代手动来源选择 |
 | **v3.0.0** | 新增文件智能归档（规则匹配 + LLM 增强）、Skill ZIP 生成器（六维度 + 场景拆分） |
 | **v2.0.0** | 路由重构、批次 UI 改版、文档画像、任务模式（全量/模板/策略） |
 | **v1.1** | 忠实度门、语态校验、占位规则分流、范围匹配 |

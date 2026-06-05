@@ -10,19 +10,6 @@ import {
 import type { BatchProgress, Config, CreateBatchMeta, PreviewClassifyResponse } from '../api';
 import PipelineProgress from './PipelineProgress';
 
-const SOURCE_CATEGORIES = [
-  '法规',
-  '公司红线',
-  '内部制度',
-  '标准条款库',
-  '合同模板',
-  '历史合同',
-  '业务规范',
-  '案例',
-  '行业特殊',
-  '审查清单',
-];
-
 const CONTRACT_TYPES = [
   '建工·总包',
   '建工·勘察设计',
@@ -69,21 +56,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function displayValue(value: string | string[] | number | null | undefined): string | null {
-  if (value == null) return null;
-  if (Array.isArray(value)) return value.filter(Boolean).join('、') || null;
-  const text = String(value).trim();
-  return text || null;
-}
-
-function formatProfileConfidence(value: string | number | null | undefined): string | null {
-  if (value == null) return null;
-  if (typeof value === 'number') {
-    return `${Math.round((value <= 1 ? value * 100 : value))}%`;
-  }
-  return displayValue(value);
-}
-
 function progressDone(status?: string): boolean {
   return status === 'success' || status === 'completed' || status === 'partial' || status === 'merged';
 }
@@ -96,30 +68,6 @@ function defaultMeta(): CreateBatchMeta {
     is_scanned: false,
     jurisdiction: '中国大陆',
   };
-}
-
-function DocumentProfileSummary({ profile }: { profile?: PreviewClassifyResponse['document_profile'] | null }) {
-  if (!profile) return null;
-  const rows = [
-    { label: '资料体裁', value: displayValue(profile.document_genre ?? profile.document_type ?? profile.genre) },
-    { label: '权威层级', value: displayValue(profile.authority_level) },
-    { label: '主主题', value: displayValue(profile.primary_theme ?? profile.primary_legal_topic ?? profile.main_topic) },
-    { label: '辅助场景', value: displayValue(profile.secondary_scenarios ?? profile.auxiliary_scenarios) },
-    { label: '处理建议', value: displayValue(profile.processing_suggestion ?? profile.processing_advice) },
-    { label: '置信度', value: formatProfileConfidence(profile.confidence) },
-  ].filter((row) => row.value);
-
-  if (rows.length === 0) return null;
-  return (
-    <div className="mt-1 text-xs text-gray-500 leading-relaxed">
-      {rows.map((row, index) => (
-        <span key={row.label}>
-          {index > 0 ? ' ｜ ' : ''}
-          <span className="text-gray-400">{row.label}：</span>{row.value}
-        </span>
-      ))}
-    </div>
-  );
 }
 
 export default function WorkbenchView() {
@@ -366,82 +314,118 @@ export default function WorkbenchView() {
                         移除
                       </button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-                      <label className="text-xs text-gray-500">
-                        来源类别
-                        <select
-                          value={item.meta.source_tag}
-                          onChange={(event) => updateFileMeta(item.id, { source_tag: event.target.value })}
-                          className="select-field text-xs"
-                        >
-                          {SOURCE_CATEGORIES.map((source) => (
-                            <option key={source} value={source}>
-                              {source}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-xs text-gray-500">
-                        合同类型
-                        <select
-                          value={item.meta.contract_types[0] || ''}
-                          onChange={(event) =>
-                            updateFileMeta(item.id, {
-                              contract_types: event.target.value ? [event.target.value] : [],
-                            })
-                          }
-                          className="select-field text-xs"
-                        >
-                          <option value="">通用</option>
-                          {CONTRACT_TYPES.map((contractType) => (
-                            <option key={contractType} value={contractType}>
-                              {contractType}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-xs text-gray-500">
-                        我方立场
-                        <select
-                          value={item.meta.our_party || '通用'}
-                          onChange={(event) => updateFileMeta(item.id, { our_party: event.target.value })}
-                          className="select-field text-xs"
-                        >
-                          {PARTY_OPTIONS.map((party) => (
-                            <option key={party} value={party}>
-                              {party}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="flex items-end gap-2 text-xs text-gray-600 pb-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={!!item.meta.is_scanned}
-                          onChange={(event) => updateFileMeta(item.id, { is_scanned: event.target.checked })}
-                          className="rounded border-gray-300 text-primary focus:ring-primary/30"
-                        />
-                        是否扫描件
-                      </label>
-                    </div>
-                    <div className="mt-2 text-xs">
+                    {/* Auto-classification result */}
+                    <div className="mt-2.5">
                       {item.classifying ? (
-                        <span className="text-primary">识别中...</span>
+                        <div className="flex items-center gap-2 text-xs text-primary">
+                          <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-primary/20 border-t-primary rounded-full" />
+                          AI 智能分类中...
+                        </div>
                       ) : item.classifyError ? (
-                        <span className="text-amber-600">识别失败，请手动配置</span>
+                        <div className="text-xs text-amber-600">识别失败，已使用默认分类</div>
                       ) : item.autoClass ? (
-                        <span className={(item.autoClass.auto_apply_source || item.autoClass.auto_apply_contract) ? 'text-emerald-600' : 'text-amber-600'}>
-                          {(item.autoClass.auto_apply_source || item.autoClass.auto_apply_contract) ? '自动识别' : '建议'}:{' '}
-                          {[
-                            item.autoClass.suggested_source_tag,
-                            ...(item.autoClass.suggested_contract_types || []),
-                          ].filter(Boolean).join('、') || item.meta.source_tag}
-                          （置信度 {Math.round(item.autoClass.confidence * 100)}%）
-                          {!(item.autoClass.auto_apply_source || item.autoClass.auto_apply_contract) ? '，未自动应用' : ''}
-                        </span>
+                        <div className="space-y-2">
+                          {/* Genre + Authority + Confidence */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-100 text-blue-700">
+                              {item.autoClass.classification?.document_genre || item.autoClass.suggested_source_tag}
+                            </span>
+                            {item.autoClass.classification?.authority_level && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 text-emerald-700">
+                                {item.autoClass.classification.authority_level}
+                              </span>
+                            )}
+                            {item.autoClass.suggested_contract_types?.[0] && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-purple-50 text-purple-700">
+                                {item.autoClass.suggested_contract_types[0]}
+                              </span>
+                            )}
+                            {item.autoClass.suggested_our_party && item.autoClass.suggested_our_party !== '通用' && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-amber-50 text-amber-700">
+                                {item.autoClass.suggested_our_party}
+                              </span>
+                            )}
+                            <span className={`text-[11px] font-semibold ${item.autoClass.confidence >= 0.7 ? 'text-emerald-600' : item.autoClass.confidence >= 0.4 ? 'text-amber-600' : 'text-red-500'}`}>
+                              {Math.round(item.autoClass.confidence * 100)}%
+                            </span>
+                          </div>
+                          {/* Feature tags */}
+                          {item.autoClass.classification?.feature_tags && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {item.autoClass.classification.feature_tags.is_redline && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-600 border border-red-200">红线</span>
+                              )}
+                              {item.autoClass.classification.feature_tags.is_case && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-200">裁判文书</span>
+                              )}
+                              {item.autoClass.classification.feature_tags.is_template && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-50 text-sky-600 border border-sky-200">模板</span>
+                              )}
+                              {item.autoClass.classification.feature_tags.has_rules && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-600 border border-teal-200">含规则</span>
+                              )}
+                              {item.autoClass.classification?.industry_hints?.map((hint: string) => (
+                                <span key={hint} className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">{hint}</span>
+                              ))}
+                            </div>
+                          )}
+                          {/* Reasoning */}
+                          {item.autoClass.classification?.reasoning && (
+                            <div className="text-[11px] text-gray-400 truncate">
+                              {item.autoClass.classification.reasoning}
+                            </div>
+                          )}
+                        </div>
                       ) : null}
                     </div>
-                    {item.autoClass && <DocumentProfileSummary profile={item.autoClass.document_profile} />}
+                    {/* Manual overrides (collapsed by default, expandable) */}
+                    <details className="mt-2">
+                      <summary className="text-[11px] text-gray-400 cursor-pointer hover:text-gray-600">手动调整</summary>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+                        <label className="text-xs text-gray-500">
+                          合同类型
+                          <select
+                            value={item.meta.contract_types[0] || ''}
+                            onChange={(event) =>
+                              updateFileMeta(item.id, {
+                                contract_types: event.target.value ? [event.target.value] : [],
+                              })
+                            }
+                            className="select-field text-xs"
+                          >
+                            <option value="">自动识别</option>
+                            {CONTRACT_TYPES.map((contractType) => (
+                              <option key={contractType} value={contractType}>
+                                {contractType}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs text-gray-500">
+                          我方立场
+                          <select
+                            value={item.meta.our_party || '通用'}
+                            onChange={(event) => updateFileMeta(item.id, { our_party: event.target.value })}
+                            className="select-field text-xs"
+                          >
+                            {PARTY_OPTIONS.map((party) => (
+                              <option key={party} value={party}>
+                                {party}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex items-end gap-2 text-xs text-gray-600 pb-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!item.meta.is_scanned}
+                            onChange={(event) => updateFileMeta(item.id, { is_scanned: event.target.checked })}
+                            className="rounded border-gray-300 text-primary focus:ring-primary/30"
+                          />
+                          是否扫描件
+                        </label>
+                      </div>
+                    </details>
                   </div>
                 ))}
               </div>
