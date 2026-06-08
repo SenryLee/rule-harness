@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.1.0-blue?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-3.2.0-blue?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&logo=python&logoColor=white" alt="python" />
   <img src="https://img.shields.io/badge/react-18-61dafb?style=flat-square&logo=react&logoColor=white" alt="react" />
   <img src="https://img.shields.io/badge/fastapi-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white" alt="fastapi" />
@@ -355,7 +355,7 @@ docker run -p 8765:8765 -e PORT=8765 rule-harness
 │   └── components/
 │       ├── WorkbenchView.tsx     # 任务工作台（上传 + 预分类 + 启动）
 │       ├── ArchiveView.tsx       # 文件归档（拖拽 → 分类 → 目录树）
-│       ├── ResultsView.tsx       # 审查结果 + Skill 生成面板
+│       └── （审查结果 + Skill 生成 + 规则完整预览见 pages/TaskDetail.tsx）
 │       ├── SettingsView.tsx      # 系统设置
 │       ├── TaskPanel.tsx         # 侧边栏导航 + 历史任务列表
 │       ├── PipelineProgress.tsx  # 五管道实时进度可视化
@@ -412,6 +412,7 @@ docker run -p 8765:8765 -e PORT=8765 rule-harness
 
 | 版本 | 主要变更 |
 |------|----------|
+| **v3.2.0** | 任务详情页恢复 Skill 一键生成与规则完整内容预览；进度条改为分阶段加权推进（解析/抽取/收尾，按文本块粒度，单调递增）；抽取并发提升约 2×（files 8 / blocks 16，并发上限 120） |
 | **v3.1.0** | LLM 优先文档分类（7体裁 + 5层级 + 特征标签），取代手动来源选择 |
 | **v3.0.0** | 新增文件智能归档（规则匹配 + LLM 增强）、Skill ZIP 生成器（六维度 + 场景拆分） |
 | **v2.0.0** | 路由重构、批次 UI 改版、文档画像、任务模式（全量/模板/策略） |

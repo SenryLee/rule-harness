@@ -4,14 +4,14 @@ models:
     api_key: ""
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model: deepseek-v4-flash
-    rpm_limit: 60
+    rpm_limit: 120
     tpm_limit: 200000
   fallback:
     provider: qwen
     api_key: ""
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model: deepseek-v4-flash
-    rpm_limit: 60
+    rpm_limit: 120
     tpm_limit: 200000
 
 extraction:
@@ -68,8 +68,8 @@ confidence:
     fidelity: 0.30
 
 concurrency:
-  files: 4
-  blocks: 8
+  files: 8
+  blocks: 16
 
 ocr:
   enabled: false
