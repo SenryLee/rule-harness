@@ -24,6 +24,7 @@ from backend.config import PROJECT_ROOT
 from backend.routes.archive_routes import router as archive_router
 from backend.routes.batch_routes import router as batch_router
 from backend.routes.config_routes import router as config_router
+from backend.routes.dify_routes import router as dify_router
 from backend.routes.rule_routes import router as rule_router
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ app.add_middleware(
 app.include_router(archive_router)
 app.include_router(batch_router)
 app.include_router(config_router)
+app.include_router(dify_router)
 app.include_router(rule_router)
 
 _UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
