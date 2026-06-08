@@ -140,7 +140,7 @@ export interface BatchProgress {
 
 export interface RuleItem {
   rule_id: string;
-  enabled: boolean;
+  enabled: string | boolean;
   risk_level: string;
   keywords: string[];
   check_item: string;

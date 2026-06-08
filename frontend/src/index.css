@@ -1,8 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
 
-/* 显式锁死 tailwind 配置路径，绕开 .js/.cjs/.mjs 自动发现。
-   含中文路径 + ESM 包时，这是最稳的方案——tailwind 看到这个指令后会用 findAtConfigPath
-   覆盖所有其他来源。 */
 @config "../tailwind.config.cjs";
 
 @tailwind base;
@@ -11,61 +8,52 @@
 
 @layer base {
   :root {
-    --bg: #FAFBFC;
-    --bg-surface: #FFFFFF;
-    --bg-muted: #F1F5F9;
-    --bg-hover: #F8FAFC;
-    --bg-active: #EFF6FF;
+    /* Apple-inspired neutral palette */
+    --color-black: #1d1d1f;
+    --color-gray-1: #424245;
+    --color-gray-2: #6e6e73;
+    --color-gray-3: #86868b;
+    --color-gray-4: #d2d2d7;
+    --color-gray-5: #f5f5f7;
+    --color-gray-6: #fbfbfd;
+    --color-white: #ffffff;
 
-    --border: #E2E8F0;
-    --border-light: #F1F5F9;
-    --border-accent: #BFDBFE;
+    /* Single accent */
+    --color-blue: #0071e3;
+    --color-blue-hover: #147ce5;
+    --color-blue-soft: rgba(0, 113, 227, 0.08);
 
-    --text-primary: #0F172A;
-    --text-secondary: #475569;
-    --text-muted: #94A3B8;
-    --text-placeholder: #CBD5E1;
+    /* Semantic */
+    --color-red: #bf4800;
+    --color-amber: #b25000;
+    --color-green: #007a3d;
+    --color-red-soft: rgba(191, 72, 0, 0.08);
+    --color-amber-soft: rgba(178, 80, 0, 0.08);
+    --color-green-soft: rgba(0, 122, 61, 0.08);
 
-    --primary: #2563EB;
-    --primary-hover: #1D4ED8;
-    --primary-light: #DBEAFE;
-    --primary-soft: #EFF6FF;
-    --primary-ring: rgba(37, 99, 235, 0.15);
+    /* Layout */
+    --bg: var(--color-gray-5);
+    --bg-surface: var(--color-white);
+    --bg-hover: var(--color-gray-5);
+    --border: var(--color-gray-4);
+    --border-light: #e8e8ed;
 
-    --accent: #0EA5E9;
-    --accent-light: #E0F2FE;
+    /* Text */
+    --text-primary: var(--color-black);
+    --text-secondary: var(--color-gray-1);
+    --text-muted: var(--color-gray-3);
 
-    --red: #EF4444;
-    --red-light: #FEF2F2;
-    --red-bg: #FEE2E2;
-    --red-text: #B91C1C;
-    --amber: #F59E0B;
-    --amber-light: #FFFBEB;
-    --amber-bg: #FEF3C7;
-    --amber-text: #92400E;
-    --green: #10B981;
-    --green-light: #F0FDF4;
-    --green-bg: #D1FAE5;
-    --green-text: #065F46;
-    --blue-bg: #DBEAFE;
-    --blue-text: #1E40AF;
-    --sky-bg: #E0F2FE;
-    --sky-text: #0369A1;
-
+    /* Radius */
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 12px;
-    --radius-xl: 16px;
-    --radius-full: 9999px;
-    --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
-    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.04);
+
+    /* Timing */
+    --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-    --dur-fast: 120ms;
-    --dur-normal: 200ms;
-    --dur-slow: 300ms;
+    --dur-fast: 150ms;
+    --dur-normal: 300ms;
+    --dur-slow: 400ms;
   }
 
   html,
@@ -76,15 +64,18 @@
   }
 
   body {
-    @apply font-body antialiased;
+    font-family: -apple-system, 'SF Pro Text', 'Inter', 'Noto Sans SC', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     background: var(--bg);
     color: var(--text-primary);
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
   ::selection {
-    @apply bg-primary-light text-primary;
+    background: var(--color-blue-soft);
+    color: var(--color-blue);
   }
 
   ::-webkit-scrollbar {
@@ -97,204 +88,134 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: var(--radius-full);
+    background: var(--color-gray-4);
+    border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
+    background: var(--color-gray-3);
   }
 }
 
 @layer components {
+  /* ── Buttons ─────────────────────────────────────── */
+
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 bg-primary text-white px-4 py-2 rounded-btn font-semibold
-           hover:bg-primary-hover focus:outline-none focus:ring-2 focus:ring-primary/30
-           active:scale-[0.98]
-           disabled:opacity-40 disabled:cursor-not-allowed
-           transition-all duration-150;
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-2.5 text-sm font-semibold
+           transition-all;
+    background: var(--color-blue);
+    color: white;
+  }
+  .btn-primary:hover {
+    background: var(--color-blue-hover);
+  }
+  .btn-primary:active {
+    transform: scale(0.97);
+  }
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-1.5 border border-air-border text-gray-600 bg-white px-4 py-2 rounded-btn font-medium
-           hover:bg-air-hover hover:text-gray-800 hover:border-air-border-accent
-           focus:outline-none focus:ring-2 focus:ring-primary/20
-           disabled:opacity-40 disabled:cursor-not-allowed
-           transition-all duration-150;
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-2.5 text-sm font-medium
+           transition-all;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
   }
-
-  .btn-danger {
-    @apply bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-btn font-medium
-           hover:bg-red-100 hover:text-red-700
-           disabled:opacity-40 disabled:cursor-not-allowed
-           transition-all duration-150;
+  .btn-secondary:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .btn-secondary:active {
+    transform: scale(0.97);
   }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 text-gray-500 px-3 py-2 rounded-btn font-medium
-           hover:bg-air-hover hover:text-gray-700
-           transition-all duration-150;
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-3 py-2 text-sm font-medium
+           transition-all;
+    color: var(--text-muted);
   }
-
-  .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold;
-  }
-
-  .badge-danger {
-    @apply badge bg-red-100 text-red-700;
-  }
-
-  .badge-warning {
-    @apply badge bg-amber-100 text-amber-700;
-  }
-
-  .badge-success {
-    @apply badge bg-emerald-100 text-emerald-700;
-  }
-
-  .badge-info {
-    @apply badge bg-blue-100 text-blue-700;
-  }
-
-  .badge-accent {
-    @apply badge bg-sky-100 text-sky-700;
-  }
-
-  .badge-gray {
-    @apply badge bg-gray-100 text-gray-600;
-  }
-
-  .card {
-    @apply bg-white border border-air-border rounded-card shadow-card;
-  }
-
-  .input-field {
-    @apply mt-1 block w-full rounded-input border border-air-border bg-white
-           px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400
-           focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15
-           disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed
-           transition-all duration-150;
-  }
-
-  .select-field {
-    @apply input-field appearance-none cursor-pointer;
-  }
-
-  .resize-handle {
-    width: 5px;
-    flex-shrink: 0;
-    cursor: col-resize;
-    background: transparent;
-    transition: background var(--dur-fast) ease;
-  }
-
-  .resize-handle:hover {
-    background: var(--primary-light);
-  }
-
-  .sidebar-nav-item {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 9px 12px;
-    text-align: left;
-    transition: all var(--dur-normal) var(--ease-out);
-  }
-
-  .sidebar-nav-item:hover {
+  .btn-ghost:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
   }
 
-  .sidebar-nav-item.active {
-    background: var(--primary-soft);
-    color: var(--primary);
+  /* ── Cards ───────────────────────────────────────── */
+
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    transition: transform var(--dur-normal) ease-out;
+  }
+  .card-hover:hover {
+    transform: translateY(-2px);
+  }
+
+  /* ── Badges ──────────────────────────────────────── */
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold;
+  }
+  .badge-danger {
+    @apply badge;
+    background: var(--color-red-soft);
+    color: var(--color-red);
+  }
+  .badge-warning {
+    @apply badge;
+    background: var(--color-amber-soft);
+    color: var(--color-amber);
+  }
+  .badge-success {
+    @apply badge;
+    background: var(--color-green-soft);
+    color: var(--color-green);
+  }
+  .badge-info {
+    @apply badge;
+    background: var(--color-blue-soft);
+    color: var(--color-blue);
+  }
+
+  /* ── Inputs ──────────────────────────────────────── */
+
+  .input-field {
+    @apply block w-full rounded-btn px-3 py-2.5 text-sm;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    transition: border-color var(--dur-fast) ease;
+  }
+  .input-field::placeholder {
+    color: var(--color-gray-3);
+  }
+  .input-field:focus {
+    outline: none;
+    border-color: var(--color-blue);
+    box-shadow: 0 0 0 3px var(--color-blue-soft);
+  }
+
+  /* ── Sidebar Navigation ──────────────────────────── */
+
+  .nav-item {
+    @apply flex items-center gap-3 rounded-btn px-3 py-2.5 text-sm font-medium transition-all;
+    color: var(--text-muted);
+  }
+  .nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .nav-item.active {
+    background: var(--color-blue-soft);
+    color: var(--color-blue);
     font-weight: 600;
   }
 
-  .sidebar-nav-indicator {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    height: 18px;
-    width: 3px;
-    transform: translateY(-50%);
-    border-radius: var(--radius-full);
-    background: var(--primary);
-  }
-
-  .task-item {
-    display: block;
-    width: 100%;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-    cursor: pointer;
-    padding: 10px 12px;
-    text-align: left;
-    transition: all var(--dur-normal) var(--ease-out);
-  }
-
-  .task-item:hover {
-    background: var(--bg-hover);
-  }
-
-  .task-item.selected {
-    background: var(--bg-active);
-    box-shadow: inset 3px 0 0 var(--primary);
-  }
-
-  .icon-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all var(--dur-normal) var(--ease-out);
-  }
-
-  .icon-button:hover {
-    background: var(--primary-soft);
-    color: var(--primary);
-  }
-
-  .icon-button.primary {
-    background: var(--primary);
-    color: #fff;
-  }
-
-  .icon-button.primary:hover {
-    background: var(--primary-hover);
-  }
-
-  .kbd {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 20px;
-    padding: 0 6px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-muted);
-    color: var(--text-muted);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    font-weight: 500;
-  }
+  /* ── Command Palette ─────────────────────────────── */
 
   .cmd-backdrop {
     position: fixed;
@@ -304,28 +225,51 @@
     justify-content: center;
     align-items: flex-start;
     padding-top: 20vh;
-    background: rgba(15, 23, 42, 0.18);
-    backdrop-filter: blur(2px);
+    background: rgba(0, 0, 0, 0.12);
+    backdrop-filter: blur(4px);
     animation: fadeIn var(--dur-fast) ease;
   }
 
   .cmd-palette {
     width: min(560px, calc(100vw - 32px));
     overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
     background: var(--bg-surface);
-    box-shadow: var(--shadow-lg);
-    animation: fadeInDown var(--dur-normal) var(--ease-out);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+    animation: slideDown var(--dur-normal) var(--ease-apple);
   }
 
-  .anim-fade-in {
-    animation: fadeIn var(--dur-normal) var(--ease-out);
+  .kbd {
+    @apply inline-flex items-center justify-center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--color-gray-5);
+    color: var(--color-gray-3);
+    font-family: 'SF Mono', 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
   }
 
-  .anim-fade-in-up {
-    animation: fadeInUp var(--dur-normal) var(--ease-out);
+  /* ── Animations ──────────────────────────────────── */
+
+  .animate-page-in {
+    animation: pageIn var(--dur-slow) var(--ease-apple);
   }
+
+  .animate-stagger > * {
+    opacity: 0;
+    animation: slideUp 0.3s ease-out forwards;
+  }
+  .animate-stagger > *:nth-child(1) { animation-delay: 0ms; }
+  .animate-stagger > *:nth-child(2) { animation-delay: 50ms; }
+  .animate-stagger > *:nth-child(3) { animation-delay: 100ms; }
+  .animate-stagger > *:nth-child(4) { animation-delay: 150ms; }
+  .animate-stagger > *:nth-child(5) { animation-delay: 200ms; }
+  .animate-stagger > *:nth-child(6) { animation-delay: 250ms; }
 }
 
 @keyframes fadeIn {
@@ -333,12 +277,22 @@
   to { opacity: 1; }
 }
 
-@keyframes fadeInUp {
+@keyframes slideUp {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes fadeInDown {
+@keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes drawerIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }

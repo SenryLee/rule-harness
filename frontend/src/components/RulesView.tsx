@@ -671,7 +671,7 @@ export default function RulesView({ batchId, refreshKey }: RulesViewProps) {
                       </td>
                       <td className="px-4 py-3">
                         <ToggleSwitch
-                          enabled={rule.enabled}
+                          enabled={rule.enabled === true || rule.enabled === '启用'}
                           onChange={() => handleToggleEnabled(rule)}
                         />
                       </td>
