@@ -99,26 +99,25 @@ def _exports_dir(batch_id: str) -> Path:
 @router.post("/upload")
 async def dify_upload(
     background_tasks: BackgroundTasks,
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
+    text: str = Form(default=""),
     source_tag: str = Form(default="dify"),
     priority: int = Form(default=5),
     contract_types: str = Form(default=""),
 ):
-    """接收 Dify HTTP 请求节点上传的文件。
+    """接收 Dify 传入的文件或文本，创建批次并**异步**抽取，立即返回 batch_id。
 
-    Dify 工作流中 HTTP 节点配置：
-      - Method: POST
-      - URL: {base_url}/api/dify/upload
-      - Body type: form-data
-      - files: 文件变量
-      - source_tag: 来源标签（可选，默认 "dify"）
-      - priority: 源优先级（可选，默认 5）
-      - contract_types: 逗号分隔的合同类型（可选）
+    异步：本接口在几百毫秒内返回 batch_id，抽取在后台进行，**不会被 Cloudflare 等
+    网关的请求超时掐断**。后续用 /status 轮询、用 /rules.json 取结果（每次调用都很快）。
 
-    返回 batch_id 供后续轮询状态和下载结果。
+    两种传入方式（二选一）：
+      - files —— multipart 文件（保真，走全部管道）
+      - text  —— 纯文本（由 Dify「文档提取器」先抽好，绕开 HTTP 节点文件大小限制）
+
+    其它表单字段：source_tag / priority / contract_types 均可选。
     """
-    if not files:
-        raise HTTPException(status_code=422, detail="至少需要上传一个文件")
+    if not files and not text.strip():
+        raise HTTPException(status_code=422, detail="需要提供 files 或 text 之一")
 
     batch_id = f"dify_{uuid.uuid4().hex[:10]}"
     batch_dir = _batch_dir(batch_id)
@@ -127,14 +126,25 @@ async def dify_upload(
     ct_list = [t.strip() for t in contract_types.split(",") if t.strip()]
 
     saved_metas: list[dict] = []
-    for idx, file in enumerate(files):
-        safe_name = f"{idx:03d}_{file.filename or 'upload.bin'}"
-        dest = batch_dir / safe_name
-        content = await file.read()
-        dest.write_bytes(content)
+    if files:
+        for idx, file in enumerate(files):
+            safe_name = f"{idx:03d}_{file.filename or 'upload.bin'}"
+            dest = batch_dir / safe_name
+            content = await file.read()
+            dest.write_bytes(content)
+            saved_metas.append({
+                "filename": safe_name,
+                "original_name": file.filename,
+                "source_tag": source_tag,
+                "priority": priority,
+                "contract_types": ct_list,
+            })
+    else:
+        safe_name = "000_dify_text.txt"
+        (batch_dir / safe_name).write_text(text, encoding="utf-8")
         saved_metas.append({
             "filename": safe_name,
-            "original_name": file.filename,
+            "original_name": "dify_text.txt",
             "source_tag": source_tag,
             "priority": priority,
             "contract_types": ct_list,
@@ -146,16 +156,16 @@ async def dify_upload(
         "status": "running",
         "started_at": now,
         "finished_at": None,
-        "total_files": len(files),
+        "total_files": len(saved_metas),
         "file_metas": saved_metas,
         "summary": {},
         "source": "dify",
     }
-    state.batch_progress[batch_id] = BatchProgress(total_files=len(files))
+    state.batch_progress[batch_id] = BatchProgress(total_files=len(saved_metas))
 
     background_tasks.add_task(_run_dify_batch, batch_id, saved_metas)
 
-    return {"batch_id": batch_id, "status": "running", "total_files": len(files)}
+    return {"batch_id": batch_id, "status": "running", "total_files": len(saved_metas)}
 
 
 async def _run_dify_batch(batch_id: str, file_metas: list[dict]) -> None:
@@ -380,7 +390,7 @@ async def dify_extract(
 
 # 对外公网地址：Dify 会按此 URL 调用本服务。**部署后务必设环境变量 PUBLIC_BASE_URL
 # 为新服务器的公网地址**（如 https://你的域名）。默认值仅为占位，避免再指向已废弃的 Render 实例。
-_PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://YOUR-SERVER-DOMAIN")
+_PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://api-rules.448898.xyz")
 
 
 @router.get("/openapi.json")
