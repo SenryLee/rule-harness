@@ -36,6 +36,49 @@ router = APIRouter(prefix="/api/dify", tags=["dify"])
 
 _UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 
+# source_tag 的默认占位值：表示「Dify 没显式指定来源」，需要自动分类来补。
+_DEFAULT_SOURCE_TAGS = frozenset({"dify", "", None})
+
+
+async def _auto_classify_metas(batch_dir: Path, file_metas: list[dict], cfg) -> None:
+    """对 Dify 传入的文件做自动分类，补齐 source_tag / is_redline / is_case。
+
+    网页端上传会先走 /preview-classify 拿到正确来源标签，但 Dify 的 upload/extract
+    之前直接写死 source_tag="dify"，导致所有文件都按「优先级5的通用文件」处理、管道
+    路由全错。这里复用与网页端相同的分类器（有 api_key 时走 LLM，否则关键词兜底），
+    只在用户未显式指定 source_tag 时覆盖。就地修改 file_metas。
+    """
+    from ..preview import extract_preview_text
+    from ..classifier import classify_document, classify_document_sync
+
+    router_obj = None
+    try:
+        if cfg.models.primary.api_key:
+            from ..llm import create_llm_router
+
+            router_obj = create_llm_router(cfg)
+    except Exception:  # noqa: BLE001 — 分类是增强项，失败不应阻断抽取
+        logger.debug("Dify 自动分类：LLM router 不可用，退回关键词分类")
+
+    for meta in file_metas:
+        if meta.get("source_tag") not in _DEFAULT_SOURCE_TAGS:
+            continue  # 用户显式指定了来源，尊重之
+        path = batch_dir / meta["filename"]
+        try:
+            content = path.read_bytes()
+            text = extract_preview_text(meta.get("original_name") or path.name, content)
+            name = meta.get("original_name") or path.name
+            if router_obj is not None:
+                clf = await classify_document(name, text, router=router_obj)
+            else:
+                clf = classify_document_sync(name, text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Dify 自动分类失败 %s: %s", meta.get("filename"), exc)
+            continue
+        meta["source_tag"] = clf.source_tag
+        meta["is_redline"] = clf.is_redline
+        meta["is_case"] = clf.is_case
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -123,6 +166,7 @@ async def _run_dify_batch(batch_id: str, file_metas: list[dict]) -> None:
 
     try:
         cfg = load_config()
+        await _auto_classify_metas(batch_dir, file_metas, cfg)
         result: BatchResult = await run_batch(
             batch_id=batch_id,
             file_metas=file_metas,
@@ -296,6 +340,7 @@ async def dify_extract(
 
     try:
         cfg = load_config()
+        await _auto_classify_metas(batch_dir, file_metas, cfg)
         result: BatchResult = await run_batch(
             batch_id=batch_id,
             file_metas=file_metas,
@@ -333,8 +378,9 @@ async def dify_extract(
 # 5. Dify 自定义工具 Schema — 供 Dify「从 URL 中导入」一键创建工具
 # ---------------------------------------------------------------------------
 
-# 对外公网地址：Dify 会按此 URL 调用本服务。换域名时改这里或设环境变量 PUBLIC_BASE_URL。
-_PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://rule-harness-demo.onrender.com")
+# 对外公网地址：Dify 会按此 URL 调用本服务。**部署后务必设环境变量 PUBLIC_BASE_URL
+# 为新服务器的公网地址**（如 https://你的域名）。默认值仅为占位，避免再指向已废弃的 Render 实例。
+_PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://YOUR-SERVER-DOMAIN")
 
 
 @router.get("/openapi.json")

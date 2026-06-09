@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import time
 from abc import ABC, abstractmethod
@@ -20,6 +21,19 @@ class LLMRateLimitError(LLMTransientError):
 
 class LLMValidationError(Exception):
     pass
+
+
+# 保守的默认全局并发上限（每个 provider 实例一个信号量；一个批次共用一个 router）。
+# DashScope 等供应商的实际 RPM/并发额度通常不高，8 个并发足以跑满吞吐又基本不触发限流。
+_DEFAULT_MAX_CONCURRENCY = 8
+
+
+def _max_concurrency() -> int:
+    try:
+        value = int(os.environ.get("LLM_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_CONCURRENCY
+    return max(1, value)
 
 
 @dataclass(frozen=True)
@@ -44,7 +58,13 @@ class LLMProvider(ABC):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self._rpm_semaphore = asyncio.Semaphore(rpm_limit)
+        # 注意：rpm_limit 历史上被当成"最大并发数"用，配置里调到 120 会对 DashScope
+        # 同时打出上百个请求，触发大量 429 → 重试风暴（变慢）+ 重试耗尽后整段丢弃（规则变少）。
+        # 这里用一个保守的全局并发硬上限兜底，无论配置/服务器 data/config.yaml 写多大都生效；
+        # 可用环境变量 LLM_MAX_CONCURRENCY 调整。
+        concurrency = max(1, min(rpm_limit, _max_concurrency()))
+        self._rpm_semaphore = asyncio.Semaphore(concurrency)
+        self.max_concurrency = concurrency
         self._tpm_limit = tpm_limit
 
     @abstractmethod
