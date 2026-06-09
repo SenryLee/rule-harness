@@ -21,7 +21,13 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..config import PROJECT_ROOT, load_config
-from ..orchestrator import BatchProgress, BatchResult, candidate_to_api_dict, run_batch
+from ..orchestrator import (
+    BatchProgress,
+    BatchResult,
+    candidate_to_api_dict,
+    decision_to_api_dict,
+    run_batch,
+)
 from .. import state
 
 logger = logging.getLogger(__name__)
@@ -271,7 +277,23 @@ async def dify_extract(
             "contract_types": ct_list,
         })
 
+    # 注册到共享状态，使该批次像网页端自己上传的任务一样出现在任务列表里，
+    # 并可被网页端实时轮询进度 / 查看规则 / 删除 / 生成 Skill。
+    # （单进程单 worker 下，网页端与本接口共享同一份 state。）
+    now = _now_iso()
     progress = BatchProgress(total_files=len(file_metas))
+    state.batches[batch_id] = {
+        "batch_id": batch_id,
+        "status": "running",
+        "started_at": now,
+        "finished_at": None,
+        "total_files": len(file_metas),
+        "file_metas": file_metas,
+        "summary": {},
+        "source": "dify",
+    }
+    state.batch_progress[batch_id] = progress
+
     try:
         cfg = load_config()
         result: BatchResult = await run_batch(
@@ -282,11 +304,22 @@ async def dify_extract(
             cfg=cfg,
             progress=progress,
         )
-    except Exception as exc:  # noqa: BLE001 — 把后台异常透传给 Dify 节点
+    except Exception as exc:  # noqa: BLE001 — 把异常透传给 Dify 节点，同时让网页端看到失败状态
         logger.exception("Dify sync extract %s failed", batch_id)
+        progress.errors.append(str(exc))
+        progress.status = "partial"
+        state.batches[batch_id]["status"] = "partial"
+        state.batches[batch_id]["finished_at"] = _now_iso()
         raise HTTPException(status_code=500, detail=f"抽取失败: {exc}") from exc
 
     rules = [candidate_to_api_dict(r) for r in result.rules]
+    state.batch_rules[batch_id] = rules
+    state.batch_decisions[batch_id] = [decision_to_api_dict(d) for d in result.decisions]
+    state.batch_exports[batch_id] = result.exports
+    state.batches[batch_id]["status"] = progress.status
+    state.batches[batch_id]["finished_at"] = _now_iso()
+    state.batches[batch_id]["summary"] = result.summary
+
     return {
         "batch_id": batch_id,
         "status": progress.status,
