@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -210,3 +211,108 @@ async def dify_export_rules_json(batch_id: str):
             "Content-Disposition": f'attachment; filename="{batch_id}_rules.json"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Dify 自定义工具 Schema — 供 Dify「从 URL 中导入」一键创建工具
+# ---------------------------------------------------------------------------
+
+# 对外公网地址：Dify 会按此 URL 调用本服务。换域名时改这里或设环境变量 PUBLIC_BASE_URL。
+_PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://rule-harness-demo.onrender.com")
+
+
+@router.get("/openapi.json")
+async def dify_openapi_schema():
+    """返回专供 Dify 导入的 OpenAPI 3.0 规范（仅含 3 个 dify 接口）。
+
+    在 Dify「工具 → 自定义 → 创建自定义工具 → 从 URL 中导入」处填入：
+        {PUBLIC_BASE_URL}/api/dify/openapi.json
+    即可一键生成 3 个 Action：上传 / 查状态 / 取规则。
+    """
+    spec = {
+        "openapi": "3.0.1",
+        "info": {
+            "title": "规则梳理工具 - Dify 接入",
+            "description": "上传法律文件→后台抽取结构化规则。异步流程：upload 拿 batch_id → 轮询 status → 完成后取 rules.json。",
+            "version": "1.0.0",
+        },
+        "servers": [{"url": _PUBLIC_BASE_URL}],
+        "paths": {
+            "/api/dify/upload": {
+                "post": {
+                    "operationId": "uploadFiles",
+                    "summary": "上传文件并启动规则抽取",
+                    "description": "上传一个或多个法律文件，立即返回 batch_id；抽取在后台异步进行。",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "multipart/form-data": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "files": {
+                                            "type": "array",
+                                            "items": {"type": "string", "format": "binary"},
+                                            "description": "要抽取规则的文件（可多个）",
+                                        },
+                                        "source_tag": {
+                                            "type": "string",
+                                            "description": "来源标签（可选）",
+                                            "default": "dify",
+                                        },
+                                        "priority": {
+                                            "type": "integer",
+                                            "description": "来源优先级（可选）",
+                                            "default": 5,
+                                        },
+                                        "contract_types": {
+                                            "type": "string",
+                                            "description": "逗号分隔的合同类型（可选）",
+                                            "default": "",
+                                        },
+                                    },
+                                    "required": ["files"],
+                                }
+                            }
+                        },
+                    },
+                    "responses": {"200": {"description": "成功，返回 batch_id"}},
+                }
+            },
+            "/api/dify/batches/{batch_id}/status": {
+                "get": {
+                    "operationId": "getBatchStatus",
+                    "summary": "查询抽取状态",
+                    "description": "轮询批次状态。status=success/partial 表示完成，running 表示进行中。",
+                    "parameters": [
+                        {
+                            "name": "batch_id",
+                            "in": "path",
+                            "required": True,
+                            "description": "upload 返回的批次 ID",
+                            "schema": {"type": "string"},
+                        }
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            },
+            "/api/dify/batches/{batch_id}/rules.json": {
+                "get": {
+                    "operationId": "getBatchRules",
+                    "summary": "获取抽取出的规则(JSON)",
+                    "description": "完成后获取规则数组；运行中会返回 409。",
+                    "parameters": [
+                        {
+                            "name": "batch_id",
+                            "in": "path",
+                            "required": True,
+                            "description": "upload 返回的批次 ID",
+                            "schema": {"type": "string"},
+                        }
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            },
+        },
+    }
+    return JSONResponse(spec)

@@ -1,0 +1,73 @@
+openapi: 3.0.1
+info:
+  title: 规则梳理工具 - Dify 接入
+  description: 上传法律文件→后台抽取结构化规则。异步流程：upload 拿 batch_id → 轮询 status → 完成后取 rules.json。
+  version: 1.0.0
+servers:
+  - url: https://rule-harness-demo.onrender.com
+paths:
+  /api/dify/upload:
+    post:
+      operationId: uploadFiles
+      summary: 上传文件并启动规则抽取
+      description: 上传一个或多个法律文件，立即返回 batch_id；抽取在后台异步进行。
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: 要抽取规则的文件（可多个）
+                source_tag:
+                  type: string
+                  description: 来源标签（可选）
+                  default: dify
+                priority:
+                  type: integer
+                  description: 来源优先级（可选）
+                  default: 5
+                contract_types:
+                  type: string
+                  description: 逗号分隔的合同类型（可选）
+                  default: ""
+              required:
+                - files
+      responses:
+        "200":
+          description: 成功，返回 batch_id
+  /api/dify/batches/{batch_id}/status:
+    get:
+      operationId: getBatchStatus
+      summary: 查询抽取状态
+      description: 轮询批次状态。status=success/partial 表示完成，running 表示进行中。
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          description: upload 返回的批次 ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /api/dify/batches/{batch_id}/rules.json:
+    get:
+      operationId: getBatchRules
+      summary: 获取抽取出的规则(JSON)
+      description: 完成后获取规则数组；运行中会返回 409。
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          description: upload 返回的批次 ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
