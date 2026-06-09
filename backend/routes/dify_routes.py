@@ -214,7 +214,90 @@ async def dify_export_rules_json(batch_id: str):
 
 
 # ---------------------------------------------------------------------------
-# 4. Dify 自定义工具 Schema — 供 Dify「从 URL 中导入」一键创建工具
+# 4. 同步抽取 — 一次调用完成「上传→抽取→返回规则」（供 Dify 工作流单节点调用）
+# ---------------------------------------------------------------------------
+
+@router.post("/extract")
+async def dify_extract(
+    files: list[UploadFile] = File(default=[]),
+    text: str = Form(default=""),
+    source_tag: str = Form(default="dify"),
+    priority: int = Form(default=5),
+    contract_types: str = Form(default=""),
+):
+    """同步抽取：阻塞到抽取完成，直接返回规则 JSON。
+
+    与 /upload（异步、返回 batch_id）不同，本接口在一次 HTTP 请求内跑完整个
+    抽取流程再返回，省去 Dify 侧的轮询/循环。适合在 Dify 1.13.3 工作流里用
+    单个节点调用（无 loop 节点也能用）。
+
+    两种传入方式（二选一）：
+      1. files —— multipart 文件（保真，走 docx 批注/修订等全部管道）
+      2. text  —— 纯文本（由 Dify document-extractor 先抽好文本再传，绕开
+                  HTTP 节点的文件大小限制；仅走正文类管道）
+
+    返回：{batch_id, status, total_rules, summary, rules}
+    """
+    if not files and not text.strip():
+        raise HTTPException(status_code=422, detail="需要提供 files 或 text 之一")
+
+    batch_id = f"difysync_{uuid.uuid4().hex[:10]}"
+    batch_dir = _batch_dir(batch_id)
+    exports_dir = _exports_dir(batch_id)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    ct_list = [t.strip() for t in contract_types.split(",") if t.strip()]
+
+    file_metas: list[dict] = []
+    if files:
+        for idx, file in enumerate(files):
+            safe_name = f"{idx:03d}_{file.filename or 'upload.bin'}"
+            (batch_dir / safe_name).write_bytes(await file.read())
+            file_metas.append({
+                "filename": safe_name,
+                "original_name": file.filename,
+                "source_tag": source_tag,
+                "priority": priority,
+                "contract_types": ct_list,
+            })
+    else:
+        safe_name = "000_dify_text.txt"
+        (batch_dir / safe_name).write_text(text, encoding="utf-8")
+        file_metas.append({
+            "filename": safe_name,
+            "original_name": "dify_text.txt",
+            "source_tag": source_tag,
+            "priority": priority,
+            "contract_types": ct_list,
+        })
+
+    progress = BatchProgress(total_files=len(file_metas))
+    try:
+        cfg = load_config()
+        result: BatchResult = await run_batch(
+            batch_id=batch_id,
+            file_metas=file_metas,
+            batch_dir=batch_dir,
+            exports_dir=exports_dir,
+            cfg=cfg,
+            progress=progress,
+        )
+    except Exception as exc:  # noqa: BLE001 — 把后台异常透传给 Dify 节点
+        logger.exception("Dify sync extract %s failed", batch_id)
+        raise HTTPException(status_code=500, detail=f"抽取失败: {exc}") from exc
+
+    rules = [candidate_to_api_dict(r) for r in result.rules]
+    return {
+        "batch_id": batch_id,
+        "status": progress.status,
+        "total_rules": len(rules),
+        "summary": result.summary,
+        "rules": rules,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. Dify 自定义工具 Schema — 供 Dify「从 URL 中导入」一键创建工具
 # ---------------------------------------------------------------------------
 
 # 对外公网地址：Dify 会按此 URL 调用本服务。换域名时改这里或设环境变量 PUBLIC_BASE_URL。
@@ -277,6 +360,38 @@ async def dify_openapi_schema():
                         },
                     },
                     "responses": {"200": {"description": "成功，返回 batch_id"}},
+                }
+            },
+            "/api/dify/extract": {
+                "post": {
+                    "operationId": "extractSync",
+                    "summary": "同步抽取（一次返回规则）",
+                    "description": "阻塞到抽取完成，直接返回规则 JSON。传 files（保真）或 text（绕开文件大小限制）二选一。",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "multipart/form-data": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "files": {
+                                            "type": "array",
+                                            "items": {"type": "string", "format": "binary"},
+                                            "description": "要抽取规则的文件（与 text 二选一）",
+                                        },
+                                        "text": {
+                                            "type": "string",
+                                            "description": "已抽好的文本（与 files 二选一）",
+                                        },
+                                        "source_tag": {"type": "string", "default": "dify"},
+                                        "priority": {"type": "integer", "default": 5},
+                                        "contract_types": {"type": "string", "default": ""},
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "responses": {"200": {"description": "成功，返回 rules 数组"}},
                 }
             },
             "/api/dify/batches/{batch_id}/status": {
