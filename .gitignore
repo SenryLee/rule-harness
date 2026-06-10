@@ -42,3 +42,4 @@ data/
 .gstack/
 .wrangler/
 .playwright-mcp/
+deploy_status.log
