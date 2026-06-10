@@ -91,15 +91,20 @@ def _rule(**overrides) -> RuleCandidate:
     return RuleCandidate(**defaults)
 
 
-def test_main_csv_stays_strictly_seven_columns(tmp_path):
+def test_main_csv_has_ten_columns_with_three_elements(tmp_path):
+    """v1.2：三要素升级为主交付物，主 CSV 7 列 → 10 列。"""
     output = tmp_path / "main.csv"
-    export_main_csv([_rule(assumption="审计字段不进入主表")], output)
+    export_main_csv([_rule(
+        assumption="假定条件进入主表",
+        behavior_mode="行为模式进入主表",
+        consequence="法律后果进入主表",
+    )], output)
 
     with output.open("r", encoding="utf-8-sig", newline="") as f:
         rows = list(csv.reader(f))
 
-    assert len(rows[0]) == 7
-    assert len(rows[1]) == 7
+    assert len(rows[0]) == 10
+    assert len(rows[1]) == 10
     assert rows[0] == [
         "规则项id",
         "是否启用",
@@ -108,7 +113,13 @@ def test_main_csv_stays_strictly_seven_columns(tmp_path):
         "检查项",
         "审查要求",
         "审查说明",
+        "假定条件",
+        "行为模式",
+        "法律后果",
     ]
+    assert rows[1][7] == "假定条件进入主表"
+    assert rows[1][8] == "行为模式进入主表"
+    assert rows[1][9] == "法律后果进入主表"
 
 
 def test_metadata_csv_includes_rule_analysis_columns(tmp_path):

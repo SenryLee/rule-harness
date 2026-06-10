@@ -37,7 +37,7 @@ git push origin main
 等 Render 部署完（一两分钟），验证接口已上线（返回需要 files/text 的提示就说明通了）：
 
 ```bash
-curl -X POST https://rule-harness-demo.onrender.com/api/dify/extract
+curl -X POST https://api-rules.448898.xyz/api/dify/extract
 ```
 
 ---
@@ -71,7 +71,7 @@ curl -X POST https://rule-harness-demo.onrender.com/api/dify/extract
 
 如果要走完整保真（含批注、修订等全部管道），就别用"文档提取器+文本"，改成**直接把文件传给后端**：
 
-1. 把你已建的「规则梳理工具」**重新导入一次 schema**（用 `https://rule-harness-demo.onrender.com/api/dify/openapi.json`），它会多出一个 `extractSync` 动作（对应 `/api/dify/extract`，支持直接传文件）。
+1. 把你已建的「规则梳理工具」**重新导入一次 schema**（用 `https://api-rules.448898.xyz/api/dify/openapi.json`），它会多出一个 `extractSync` 动作（对应 `/api/dify/extract`，支持直接传文件）。
 2. 在工作流里把中间两个节点（文档提取器 + HTTP 请求）换成**一个工具节点**，选 `规则梳理工具 / extractSync`，把 `files` 参数指到开始节点的上传文件。
 3. 其余（解析 + 结束）不变。
 

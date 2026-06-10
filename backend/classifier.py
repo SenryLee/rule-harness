@@ -68,14 +68,21 @@ class ClassificationResult:
     source_priority: int
     is_redline: bool
     is_case: bool
+    # v1.2 置信仲裁：LLM 与关键词预筛分歧且 LLM 置信不足时，
+    # 标记需人工确认并给出备选体裁，前端高亮让用户二选一。
+    needs_confirmation: bool = False
+    alternative_genre: str = ""
 
 
 # ── Phase 1: Keyword pre-screening ──────────────────────────────────
+# v1.2：词表统一迁移到 backend/classification/taxonomy.yaml；
+# 下面的内置列表仅作为 taxonomy 加载失败时的兜底。
 
-_GENRE_RULES: list[dict[str, Any]] = [
+_FALLBACK_GENRE_RULES: list[dict[str, Any]] = [
     {
         "genre": "已有规则库",
-        "filename_kw": ("规则", "规则库", "审查清单", "审查意见", "审核要点", "规则项导入", "审查手册"),
+        "filename_kw": ("规则", "规则库", "审查清单", "审查意见", "审核要点", "规则项导入",
+                        "审查手册", "审核指引", "审查指引", "合同审核", "合同审查", "审核手册"),
         "body_kw": ("规则项id", "规则编号", "检查项", "审查要求", "风险等级", "是否启用"),
         "suffixes": {".csv", ".tsv"},
         "weight": 6,
@@ -140,6 +147,12 @@ _GENRE_RULES: list[dict[str, Any]] = [
     },
 ]
 
+def _genre_rules() -> list[dict[str, Any]]:
+    from .classification import load_genre_rules
+
+    return load_genre_rules() or _FALLBACK_GENRE_RULES
+
+
 _REDLINE_KEYWORDS = ("红线", "底线", "不可接受", "退让", "谈判清单", "谈判底线")
 _CASE_KEYWORDS = ("判决", "裁定", "裁判", "法院认为", "本院认为", "案例", "纠纷")
 _TEMPLATE_KEYWORDS = ("模板", "范本", "示范文本", "合同样本", "格式合同")
@@ -148,22 +161,28 @@ _CASE_FILENAME_RX = re.compile(r"[^\s]{1,16}诉[^\s]{1,32}(?:纠纷|案)")
 
 
 def prescreen(filename: str, text: str) -> dict[str, Any]:
-    """Fast keyword-based pre-screening. No API calls."""
-    haystack = f"{filename}\n{text[:500]}"
+    """Fast keyword-based pre-screening. No API calls.
+
+    v1.2：文件名/正文权重对调（文件名 1.5→0.8，正文 0.5→0.8），
+    正文窗口从 500 字扩到 3000 字——文件名叫"案例汇编"的培训手册
+    不应再被文件名一票拖走。
+    """
+    body_window = text[:3000]
+    haystack = f"{filename}\n{body_window[:500]}"
 
     # Score each genre
     scores: list[tuple[str, float, list[str]]] = []
-    for rule in _GENRE_RULES:
+    for rule in _genre_rules():
         score = 0.0
         hits: list[str] = []
         for kw in rule["filename_kw"]:
             if kw in filename:
-                score += rule["weight"] * 1.5
+                score += rule["weight"] * 1.2
                 hits.append(f"文件名:{kw}")
         for kw in rule["body_kw"]:
-            count = text[:500].count(kw)
+            count = body_window.count(kw)
             if count:
-                score += min(count, 3) * rule["weight"] * 0.5
+                score += min(count, 3) * rule["weight"] * 0.8
                 hits.append(f"正文:{kw}")
         if "suffixes" in rule:
             from pathlib import Path
@@ -182,7 +201,8 @@ def prescreen(filename: str, text: str) -> dict[str, Any]:
     scores.sort(key=lambda x: x[1], reverse=True)
     genre = scores[0][0] if scores else "合同文本"
     evidence = scores[0][2][:5] if scores else ["未命中强线索，默认合同文本"]
-    confidence = min(0.75, 0.2 + (scores[0][1] / 20 if scores else 0))
+    # v1.2：权重改标定（文件名 1.5→1.2、正文 0.5→0.8/3000字窗口），分母同步 20→16
+    confidence = min(0.75, 0.2 + (scores[0][1] / 16 if scores else 0))
 
     # Detect feature tags
     tags = {
@@ -262,9 +282,17 @@ async def classify_with_llm(
     filename: str,
     text: str,
     router: Any,
+    headings: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Call LLM for precise classification. Returns None on failure."""
-    user_msg = f"文件名: {filename}\n\n正文摘要（前2000字）:\n{text[:2000]}"
+    """Call LLM for precise classification. Returns None on failure.
+
+    v1.2：text 应为多点采样文本（头/中/尾），并可附标题列表——
+    标题对区分"手册 vs 法规 vs 合同"的区分度远高于正文前 2000 字。
+    """
+    headings_text = ""
+    if headings:
+        headings_text = "\n\n文档标题结构（前20个）:\n" + "\n".join(headings[:20])
+    user_msg = f"文件名: {filename}{headings_text}\n\n正文采样（头部/中部/尾部）:\n{text[:3000]}"
     try:
         result = await router.chat_json(
             system=_LLM_CLASSIFY_SYSTEM,
@@ -288,7 +316,17 @@ def merge_results(
     pre: dict[str, Any],
     llm: dict[str, Any] | None,
 ) -> ClassificationResult:
-    """Merge pre-screening and LLM results. LLM wins when available."""
+    """Merge pre-screening and LLM results（v1.2 置信仲裁）。
+
+    - 一致 → 取两者置信度较高者；
+    - 分歧且 LLM 置信 ≥ 0.8 → 采纳 LLM；
+    - 分歧且 LLM 置信 < 0.8 → 仍展示 LLM 结论，但 needs_confirmation=True，
+      附 alternative_genre（预筛结论）和双方证据，由前端让用户一键二选一。
+    不再是"LLM 一票否决预筛"。
+    """
+    needs_confirmation = False
+    alternative_genre = ""
+
     if llm and llm.get("document_genre") in DOCUMENT_GENRES:
         genre = llm["document_genre"]
         authority = llm.get("authority_level", _infer_authority(genre, {}))
@@ -297,6 +335,18 @@ def merge_results(
         industry = llm.get("industry_hints", [])
         reasoning = llm.get("reasoning", "")
         evidence = [f"LLM: {reasoning}"]
+
+        pre_genre = pre.get("genre", "")
+        pre_conf = float(pre.get("confidence", 0.0))
+        if pre_genre == genre:
+            confidence = max(confidence, pre_conf)
+        elif confidence < 0.8 and pre_conf >= 0.3:
+            needs_confirmation = True
+            alternative_genre = pre_genre
+            evidence.append(
+                f"预筛分歧: {pre_genre}（{'；'.join(pre.get('evidence', [])[:3])}）"
+            )
+
         # Merge pre-screening tags (OR logic — if either detected it, flag it)
         pre_tags = pre.get("feature_tags", {})
         merged_tags = {
@@ -334,6 +384,8 @@ def merge_results(
         source_priority=priority,
         is_redline=merged_tags.get("is_redline", False),
         is_case=merged_tags.get("is_case", False) or genre == "裁判文书",
+        needs_confirmation=needs_confirmation,
+        alternative_genre=alternative_genre,
     )
 
 
@@ -381,20 +433,22 @@ async def classify_document(
     text: str,
     router: Any | None = None,
     skip_llm: bool = False,
+    headings: list[str] | None = None,
 ) -> ClassificationResult:
     """Full two-phase classification.
 
     Args:
         filename: original filename
-        text: preview text (first 2000-3000 chars)
+        text: preview text（v1.2 起为头/中/尾多点采样文本）
         router: LLMRouter instance. If None, LLM phase is skipped.
         skip_llm: force skip LLM even if router is available
+        headings: 文档标题列表（可选，提高体裁区分度）
     """
     pre = prescreen(filename, text)
     llm_result = None
 
     if router and not skip_llm:
-        llm_result = await classify_with_llm(filename, text, router)
+        llm_result = await classify_with_llm(filename, text, router, headings=headings)
 
     return merge_results(pre, llm_result)
 
@@ -420,4 +474,6 @@ def classification_to_dict(result: ClassificationResult) -> dict[str, Any]:
         "source_priority": result.source_priority,
         "is_redline": result.is_redline,
         "is_case": result.is_case,
+        "needs_confirmation": result.needs_confirmation,
+        "alternative_genre": result.alternative_genre,
     }

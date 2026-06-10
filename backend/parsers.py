@@ -838,67 +838,46 @@ def parse_excel(
 
     try:
         import openpyxl
+        from openpyxl.utils.exceptions import InvalidFileException
     except ImportError:
         return _empty_parsed(filepath.name, source_tag, contract_types,
                              industry_context, is_scanned, is_redline, is_case,
                              sha256, priority)
 
-    try:
-        if filepath.suffix.lower() in (".csv", ".tsv"):
-            return _parse_csv_as_passthrough(filepath, source_tag, contract_types,
-                                             industry_context, is_scanned, is_redline,
-                                             is_case, sha256, priority)
+    suffix = filepath.suffix.lower()
+    if suffix in (".csv", ".tsv"):
+        return _parse_csv_as_passthrough(filepath, source_tag, contract_types,
+                                         industry_context, is_scanned, is_redline,
+                                         is_case, sha256, priority)
 
+    if suffix == ".xls":
+        # openpyxl 只读 OOXML，旧版 .xls（OLE2）读不了；明确提示而非静默空结果。
+        return _empty_parsed(filepath.name, source_tag, contract_types,
+                             industry_context, is_scanned, is_redline, is_case,
+                             sha256, priority,
+                             parse_warnings=("xls_unsupported_convert_to_xlsx",))
+
+    try:
         wb = openpyxl.load_workbook(str(filepath), read_only=True, data_only=True)
-    except (BadZipFile, OSError, KeyError):
+    except (BadZipFile, OSError, KeyError, InvalidFileException):
         return _empty_parsed(filepath.name, source_tag, contract_types,
                              industry_context, is_scanned, is_redline, is_case,
                              sha256, priority)
 
     blocks: list[ContentBlock] = []
     is_passthrough = False
+    multi_sheet = len(wb.sheetnames) > 1
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(min_row=1, values_only=True))
         if not rows:
             continue
-
-        headers = [str(c) if c is not None else "" for c in rows[0]]
-        passthrough_score = _compute_passthrough_score(headers)
-
-        if passthrough_score >= 3:
-            is_passthrough = True
-            data_rows = rows[1:] if len(rows) > 1 else []
-            for row_idx, row in enumerate(data_rows):
-                row_text_parts = []
-                for col_idx, cell in enumerate(row):
-                    header_label = headers[col_idx] if col_idx < len(headers) else f"Col{col_idx}"
-                    val = str(cell).strip() if cell is not None else ""
-                    if val:
-                        row_text_parts.append(f"{header_label}: {val}")
-                combined = "; ".join(row_text_parts)
-                if combined.strip():
-                    blocks.append(ContentBlock(
-                        block_id=f"{sheet_name}!A{row_idx + 2}",
-                        text=combined,
-                        location=f"{sheet_name}!A{row_idx + 2}",
-                        block_type="table_row",
-                    ))
-        else:
-            text_lines = [" ".join(str(c) if c is not None else "" for c in headers)]
-            for row_idx, row in enumerate(rows[1:], start=2):
-                line = " ".join(str(c) if c is not None else "" for c in row)
-                if line.strip():
-                    text_lines.append(line)
-            combined_text = "\n".join(text_lines)
-            if combined_text.strip():
-                blocks.append(ContentBlock(
-                    block_id=f"{sheet_name}-text",
-                    text=combined_text,
-                    location=f"{sheet_name}",
-                    block_type="paragraph",
-                ))
+        sheet_blocks, sheet_passthrough = _sheet_rows_to_blocks(
+            sheet_name, rows, multi_sheet
+        )
+        is_passthrough = is_passthrough or sheet_passthrough
+        blocks.extend(sheet_blocks)
 
     wb.close()
 
@@ -945,38 +924,9 @@ def _parse_csv_as_passthrough(
                              industry_context, is_scanned, is_redline, is_case,
                              sha256, priority)
 
-    headers = all_rows[0]
-    passthrough_score = _compute_passthrough_score(list(headers))
-
-    if passthrough_score >= 3:
-        is_passthrough = True
-        for row_idx, row in enumerate(all_rows[1:], start=2):
-            parts = [
-                f"{headers[ci]}: {cv}" if ci < len(headers) else f"Col{ci}: {cv}"
-                for ci, cv in enumerate(row) if str(cv).strip()
-            ]
-            combined = "; ".join(parts)
-            if combined.strip():
-                blocks.append(ContentBlock(
-                    block_id=f"row{row_idx}",
-                    text=combined,
-                    location=f"Row{row_idx}",
-                    block_type="table_row",
-                ))
-    else:
-        lines = [",".join(str(c) for c in headers)]
-        for row in all_rows[1:]:
-            line = ",".join(str(c) for c in row)
-            if line.strip():
-                lines.append(line)
-        combined = "\n".join(lines)
-        if combined.strip():
-            blocks.append(ContentBlock(
-                block_id="csv-text",
-                text=combined,
-                location="Sheet1",
-                block_type="paragraph",
-            ))
+    # 与 xlsx 共用同一套行→块逻辑：检测表头、按行打"表头: 值"标注，避免整表拼成一个巨块。
+    sheet_blocks, is_passthrough = _sheet_rows_to_blocks("Sheet1", all_rows, multi_sheet=False)
+    blocks.extend(sheet_blocks)
 
     return ParsedDocument(
         sha256=sha256,
@@ -1004,6 +954,123 @@ def _compute_passthrough_score(headers: list[str]) -> int:
                 score += 1
                 break
     return score
+
+
+# 表格解析最多向下扫描多少行寻找真正的表头（跳过标题/横幅/空行）。
+_HEADER_SCAN_ROWS = 8
+
+
+def _col_letter(idx0: int) -> str:
+    """0 基列号 → Excel 列字母（0→A, 26→AA）。用于给无表头的列兜底命名。"""
+    s = ""
+    n = idx0 + 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _cell_str(cell: object) -> str:
+    return str(cell).strip() if cell is not None else ""
+
+
+def _detect_header_row(rows: list, scan: int = _HEADER_SCAN_ROWS) -> int | None:
+    """在前若干行里挑"最像表头"的一行：先比直通关键词命中数，再比非空单元格数。
+
+    返回行下标；若前若干行都不足 2 个非空单元格（多半是叙述型/单列表），返回 None。
+    这样标题行、横幅行、空行在真正表头之上时不会被误当表头，避免列错位。
+    """
+    candidates: list[tuple[int, int]] = []  # (行下标, 关键词得分)
+    for i, row in enumerate(rows[:scan]):
+        nonempty = sum(1 for c in row if _cell_str(c))
+        if nonempty < 2:
+            continue
+        score = _compute_passthrough_score([_cell_str(c) for c in row])
+        candidates.append((i, score))
+    if not candidates:
+        return None
+    # 仅当某行命中审查类关键词达到直通阈值(≥3)时，才认定它是规则库表头并跨过其上的标题行；
+    # 阈值以下的零星命中（如数据里出现"标准间"含"标准"）不作数，避免把数据行误当表头。
+    strong = [(i, s) for i, s in candidates if s >= 3]
+    if strong:
+        max_score = max(s for _, s in strong)
+        return min(i for i, s in strong if s == max_score)
+    # 无强关键词信号（普通内容表）：表头在数据之上，取最靠上的"≥2 非空"行，
+    # 不能按非空单元格数挑，否则会把单元格更满的数据行误当表头。
+    return candidates[0][0]
+
+
+def _row_to_labeled_text(headers: list[str], row: tuple) -> str:
+    """把一行渲染成 "表头: 值; 表头: 值"，跳过空单元格，空表头用 列X 兜底。
+
+    保留列语义，避免整行单元格用空格拼接后串味/错位。
+    """
+    parts: list[str] = []
+    for ci, cell in enumerate(row):
+        val = _cell_str(cell)
+        if not val:
+            continue
+        label = headers[ci] if ci < len(headers) and headers[ci] else f"列{_col_letter(ci)}"
+        parts.append(f"{label}: {val}")
+    return "; ".join(parts)
+
+
+def _row_to_plain_text(row: tuple) -> str:
+    """无表头时：把行内非空单元格用 ' | ' 连接，保留单元格边界。"""
+    return " | ".join(_cell_str(c) for c in row if _cell_str(c))
+
+
+def _sheet_rows_to_blocks(
+    sheet_name: str,
+    rows: list,
+    multi_sheet: bool,
+) -> tuple[list[ContentBlock], bool]:
+    """把单个工作表/CSV 的行转成块，返回 (blocks, 该表是否为直通规则表)。
+
+    - 检测表头行（跳过其上的标题/空行）；
+    - 直通表（表头命中审查类关键词 ≥3）：每条数据行 → 一个 table_row 块，交直通管道按行导入；
+    - 内容表：每条数据行 → 一个带"表头: 值"标注的 paragraph 块（不再整表拼成一个巨块），
+      多表时在表前加一个工作表名 heading 块作为上下文；
+    - 无表头（叙述/单列）：每非空行 → 一个 paragraph 块。
+    """
+    blocks: list[ContentBlock] = []
+    header_idx = _detect_header_row(rows)
+
+    if header_idx is None:
+        for r, row in enumerate(rows, start=1):
+            text = _row_to_plain_text(row)
+            if text:
+                blocks.append(ContentBlock(
+                    block_id=f"{sheet_name}!A{r}",
+                    text=text,
+                    location=f"{sheet_name}!A{r}",
+                    block_type="paragraph",
+                ))
+        return blocks, False
+
+    headers = [_cell_str(c) for c in rows[header_idx]]
+    passthrough = _compute_passthrough_score(headers) >= 3
+    block_type = "table_row" if passthrough else "paragraph"
+
+    if multi_sheet and not passthrough:
+        blocks.append(ContentBlock(
+            block_id=f"{sheet_name}!hdr",
+            text=f"【工作表：{sheet_name}】",
+            location=sheet_name,
+            block_type="heading",
+        ))
+
+    for r, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+        text = _row_to_labeled_text(headers, row)
+        if not text:
+            continue
+        blocks.append(ContentBlock(
+            block_id=f"{sheet_name}!A{r}",
+            text=text,
+            location=f"{sheet_name}!A{r}",
+            block_type=block_type,
+        ))
+    return blocks, passthrough
 
 
 def _empty_parsed(

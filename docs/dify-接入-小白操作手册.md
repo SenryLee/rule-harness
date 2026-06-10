@@ -1,6 +1,6 @@
 # 规则梳理工具接入 Dify —— 小白逐步操作手册
 
-> 你的后端已上线且可用：`https://rule-harness-demo.onrender.com`
+> 你的后端已上线且可用：`https://api-rules.448898.xyz`
 > 目标：在 Dify 工作流里上传一份法律文件 → 自动抽出规则。
 
 ---
@@ -27,7 +27,7 @@
 3. 粘贴这个地址，确定：
 
    ```
-   https://rule-harness-demo.onrender.com/api/dify/openapi.json
+   https://api-rules.448898.xyz/api/dify/openapi.json
    ```
 4. 下方"可用工具"会自动出现 3 个 Action：`uploadFiles` / `getBatchStatus` / `getBatchRules`。
 
@@ -73,7 +73,7 @@
 
 **稳做法（用 HTTP 请求节点，强烈推荐）**：加一个 **HTTP 请求** 节点：
 - 方法：`POST`
-- URL：`https://rule-harness-demo.onrender.com/api/dify/upload`
+- URL：`https://api-rules.448898.xyz/api/dify/upload`
 - Body：选 **form-data**，加一个字段 key 填 `files`，**值类型选「文件」**，引用 `sys.files`（或开始节点的 `doc`）。
 - ⚠️ 不要手动加 `Content-Type` 头（系统会自动加 multipart 边界，手填反而会坏）。
 - 这一步返回的 body 里有 `batch_id`，记下引用名（例如 `{{#http1.body.batch_id#}}`）。

@@ -33,6 +33,22 @@ def _deep_merge(base: dict, update: dict) -> None:
             base[k] = v
 
 
+def _strip_blank_api_keys(payload: dict) -> None:
+    """剥离 payload 里为空的 api_key，避免覆盖已存的密钥。
+
+    多个前端保存路径会回传整份 config；若某个组件在 key 尚未填充时保存，
+    payload 会带 api_key=""，blind merge 就会把服务器上已配置的密钥清空
+    （"每次更新后 key 丢失"的根因）。空值视为"不修改"，非空才更新。
+    """
+    models = payload.get("models")
+    if not isinstance(models, dict):
+        return
+    for slot in ("primary", "fallback"):
+        slot_cfg = models.get(slot)
+        if isinstance(slot_cfg, dict) and not str(slot_cfg.get("api_key", "") or "").strip():
+            slot_cfg.pop("api_key", None)
+
+
 # ---- Config CRUD ----
 
 @router.get("/config")
@@ -45,6 +61,7 @@ async def get_config():
 async def update_config(payload: dict):
     cfg = load_config()
     merged = config_to_dict(cfg)
+    _strip_blank_api_keys(payload)
     _deep_merge(merged, payload)
     raw = yaml.safe_load(yaml.safe_dump(merged, allow_unicode=True))
     new_cfg = _parse_config(raw)

@@ -181,6 +181,20 @@ class TestValidateAtomic:
         assert failures == []
 
     def test_check_item_too_long_fails(self):
+        # v1.2：上限从 30 放宽到 40 字
+        rule = {
+            "check_item": "这是一个非常非常非常长的检查项，超过四十个字的限制应该被检测出来并报告错误，再补几个字凑长度",
+            "requirement": "[条款] 测试",
+            "notes": "",
+            "risk_level": "中",
+            "keywords": ["测试"],
+            "theme_key": "payment.term.days",
+        }
+        failures = validate_atomic(rule)
+        assert "check_item_too_long" in failures
+
+    def test_check_item_within_forty_chars_passes(self):
+        # 36 字：v1.1 会判罚，v1.2 放行
         rule = {
             "check_item": "这是一个非常非常长的检查项，超过三十个字的限制应该被检测出来并报告错误",
             "requirement": "[条款] 测试",
@@ -190,7 +204,7 @@ class TestValidateAtomic:
             "theme_key": "payment.term.days",
         }
         failures = validate_atomic(rule)
-        assert "check_item_too_long" in failures
+        assert "check_item_too_long" not in failures
 
     def test_connector_not_atomic_fails(self):
         rule = {
@@ -204,7 +218,8 @@ class TestValidateAtomic:
         failures = validate_atomic(rule)
         assert "check_item_not_atomic" in failures
 
-    def test_connector_simultaneous_fails(self):
+    def test_connector_noun_he_passes(self):
+        # v1.2：名词并列"和"不再判罚（旧版大量误伤"设计和施工"类合法规则）
         rule = {
             "check_item": "违约金和赔偿上限",
             "requirement": "[条款] 测试要求",
@@ -214,11 +229,25 @@ class TestValidateAtomic:
             "theme_key": "payment.late_fee.cap_ratio",
         }
         failures = validate_atomic(rule)
-        assert "check_item_not_atomic" in failures
+        assert "check_item_not_atomic" not in failures
 
-    def test_connector_yiji_fails(self):
+    def test_connector_noun_yiji_passes(self):
+        # v1.2：名词并列"以及"不再判罚
         rule = {
             "check_item": "违约金以及赔偿上限",
+            "requirement": "[条款] 测试要求",
+            "notes": "",
+            "risk_level": "高",
+            "keywords": ["测试"],
+            "theme_key": "payment.late_fee.cap_ratio",
+        }
+        failures = validate_atomic(rule)
+        assert "check_item_not_atomic" not in failures
+
+    def test_connector_simultaneous_fails(self):
+        # 谓语级连接词"同时"仍判罚
+        rule = {
+            "check_item": "交付货物同时支付价款",
             "requirement": "[条款] 测试要求",
             "notes": "",
             "risk_level": "高",

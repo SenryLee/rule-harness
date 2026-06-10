@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Download, CheckCircle2, Sparkles, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Download, CheckCircle2, Sparkles, X, Loader2, CircleStop } from 'lucide-react';
 import {
   fetchBatch,
   fetchBatchRules,
   subscribeBatchProgress,
   applyMerge,
+  cancelBatch,
   downloadExport,
   generateSkill,
   downloadSkillZip,
@@ -15,6 +16,8 @@ import type { Batch, RuleItem, BatchProgress, ExportKind, SkillGenerateResponse 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
     running: '进行中',
+    stopping: '停止中',
+    cancelled: '已停止',
     success: '完成',
     partial: '部分完成',
     merged: '已入库',
@@ -129,9 +132,18 @@ export default function TaskDetail() {
     return unsub;
   }, [batchId]);
 
-  const isRunning = batch?.status === 'running' || progress?.status === 'running';
+  const [stopping, setStopping] = useState(false);
+  const isStopping =
+    stopping || batch?.status === 'stopping' || progress?.cancel_requested === true;
+  const isRunning =
+    batch?.status === 'running' ||
+    batch?.status === 'stopping' ||
+    progress?.status === 'running';
   const isDone =
-    batch?.status === 'success' || batch?.status === 'partial' || batch?.status === 'merged';
+    batch?.status === 'success' ||
+    batch?.status === 'partial' ||
+    batch?.status === 'cancelled' ||
+    batch?.status === 'merged';
 
   const handleApply = async () => {
     if (!batchId) return;
@@ -140,6 +152,17 @@ export default function TaskDetail() {
       fetchBatch(batchId).then(setBatch).catch(() => {});
     } catch {
       // ignore
+    }
+  };
+
+  const handleStop = async () => {
+    if (!batchId) return;
+    setStopping(true);
+    try {
+      await cancelBatch(batchId);
+      fetchBatch(batchId).then(setBatch).catch(() => {});
+    } catch {
+      setStopping(false); // 失败时允许重试
     }
   };
 
@@ -163,6 +186,11 @@ export default function TaskDetail() {
             {batch?.started_at && ` · ${batch.started_at.slice(0, 16).replace('T', ' ')}`}
           </p>
         </div>
+        {isRunning && (
+          <button className="btn-secondary" onClick={handleStop} disabled={isStopping}>
+            <CircleStop size={16} /> {isStopping ? '停止中…' : '停止'}
+          </button>
+        )}
         {isDone && (
           <button className="btn-secondary" onClick={() => setSkillOpen(true)}>
             <Sparkles size={16} /> 生成 Skill
@@ -200,6 +228,11 @@ export default function TaskDetail() {
           {progress.current_step === 'extracting' && progress.total_blocks > 0 && (
             <div className="text-xs text-[var(--text-muted)]">
               已处理 {progress.processed_blocks}/{progress.total_blocks} 个文本块
+            </div>
+          )}
+          {isStopping && (
+            <div className="text-xs text-[var(--color-orange,#c2410c)]">
+              正在停止：完成在途文本块后结束，已抽取的规则将保留并照常去重导出。
             </div>
           )}
           {progress.errors.length > 0 && (

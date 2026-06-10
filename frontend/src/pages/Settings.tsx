@@ -135,15 +135,18 @@ export default function Settings() {
             <h3 className="text-sm font-semibold">抽取参数</h3>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs text-[var(--text-muted)]">颗粒度</label>
-                <select
-                  className="input-field mt-1"
-                  value={config.extraction.granularity}
-                  onChange={(e) => updateField('extraction.granularity', e.target.value)}
-                >
-                  <option value="fine">精细</option>
-                  <option value="balanced">平衡</option>
-                </select>
+                <label className="text-xs text-[var(--text-muted)]">
+                  颗粒度：{config.extraction.granularity_level ?? 3} 档（1 粗 — 5 极细）
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  className="mt-1 w-full"
+                  value={config.extraction.granularity_level ?? 3}
+                  onChange={(e) => updateField('extraction.granularity_level', Number(e.target.value))}
+                />
               </div>
               <div>
                 <label className="text-xs text-[var(--text-muted)]">法规深度</label>

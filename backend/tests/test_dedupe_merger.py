@@ -63,6 +63,30 @@ def test_dedupe_threshold_conflict_flagged():
     assert out[0].conflict_flag == "阈值冲突"
 
 
+def test_dedupe_keeps_distinct_atomic_rules_same_fingerprint():
+    """回归：5 元组指纹相同但审查口径不同的原子规则不得被折叠。
+
+    单一主题法规（如赠与章）里第658条任意撤销 + 第663条三种撤销情形共享
+    theme+subject+predicate+threshold+direction，旧逻辑在 level>=3 会压成一条。
+    """
+    common = dict(
+        theme_key="termination.cause.material_breach",
+        subject="赠与人",
+        predicate="可以撤销",
+        threshold_type="无",
+        direction="正向",
+    )
+    rules = [
+        _mk(check_item="赠与人可否任意撤销赠与", requirement="[条款] 权利转移前可撤销", **common),
+        _mk(check_item="受赠人严重侵害可否撤销", requirement="[条款] 严重侵害近亲属可撤销", **common),
+        _mk(check_item="受赠人不履行扶养可否撤销", requirement="[条款] 不履行扶养义务可撤销", **common),
+        _mk(check_item="受赠人不履行约定义务可否撤销", requirement="[条款] 不履行约定义务可撤销", **common),
+    ]
+    cfg = load_config()  # 运行档位 level=4
+    out = dedupe_with_priority(rules, cfg)
+    assert len(out) == 4, "不同审查口径的撤销情形应各自成规则，而非折叠为一条"
+
+
 def test_build_rule_ids_prefix():
     cfg = load_config()
     rule = _mk(contract_types=("采购",), rule_type="clause")

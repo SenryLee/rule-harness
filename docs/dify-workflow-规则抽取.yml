@@ -195,7 +195,7 @@ workflow:
           max_write_timeout: 60
         title: 调用规则梳理(同步抽取)
         type: http-request
-        url: https://rule-harness-demo.onrender.com/api/dify/extract
+        url: https://api-rules.448898.xyz/api/dify/extract
         variables: []
       height: 130
       id: '1780000000003'

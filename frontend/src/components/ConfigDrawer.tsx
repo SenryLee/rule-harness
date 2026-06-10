@@ -42,6 +42,7 @@ const DEFAULT_CONFIG: Config = {
   },
   extraction: {
     granularity: 'balanced',
+    granularity_level: 3,
     regulation_depth: 'full',
     consistency_sampling: false,
     industry_preset: '',
@@ -196,6 +197,15 @@ const BUILTIN_PROFILE_NAMES = new Set([
   '能源电力',
   'test',
 ]);
+
+// v1.2: 颗粒度档位说明（与后端 GRANULARITY_DENSITY 对应）
+const GRANULARITY_LEVEL_LABELS: Record<number, { label: string; desc: string }> = {
+  1: { label: '粗', desc: '只取强义务/高风险条款；块大、合并激进，约 0.5–1 条规则/千字' },
+  2: { label: '较粗', desc: '稳定口径为主，约 1–2 条/千字' },
+  3: { label: '平衡', desc: '默认档位：独立条件/主体/阈值/例外必拆，约 2–4 条/千字' },
+  4: { label: '细', desc: '少漏审优先，约 4–6 条/千字' },
+  5: { label: '极细', desc: '穷尽式拆解：每个例外/列举项单独成规则，约 6–10 条/千字' },
+};
 
 const MODEL_PROVIDER_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
@@ -890,25 +900,40 @@ export default function ConfigDrawer({ onClose, onSaved }: ConfigDrawerProps) {
               <CollapsibleSection title="抽取配置">
                 <div className="space-y-4">
                   <div>
-                    <Label>抽取粒度</Label>
-                    <div className="flex gap-6 mt-1">
-                      {(['fine', 'balanced'] as const).map((g) => (
-                        <label
-                          key={g}
-                          className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer"
-                        >
-                          <input
-                            type="radio"
-                            name="granularity"
-                            value={g}
-                            checked={config.extraction.granularity === g}
-                            onChange={(e) => updateExtraction('granularity', e.target.value)}
-                            className="text-primary focus:ring-primary/30"
-                          />
-                          {g === 'fine' ? '精细' : '平衡'}
-                        </label>
-                      ))}
+                    <div className="flex items-center justify-between">
+                      <Label>抽取颗粒度（全局默认，任务可单独覆盖）</Label>
+                      <span className="text-sm text-primary font-semibold">
+                        {config.extraction.granularity_level ?? 3} 档
+                        （{GRANULARITY_LEVEL_LABELS[config.extraction.granularity_level ?? 3]?.label}）
+                      </span>
                     </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={config.extraction.granularity_level ?? 3}
+                      onChange={(e) => {
+                        const level = Number(e.target.value);
+                        setConfig((prev) => ({
+                          ...prev,
+                          extraction: {
+                            ...prev.extraction,
+                            granularity_level: level,
+                            granularity: level >= 4 ? 'fine' : 'balanced',
+                          },
+                        }));
+                      }}
+                      className="w-full mt-1 accent-primary"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400">
+                      <span>1 粗</span>
+                      <span>3 平衡</span>
+                      <span>5 极细</span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {GRANULARITY_LEVEL_LABELS[config.extraction.granularity_level ?? 3]?.desc}
+                    </p>
                   </div>
 
                   <div>

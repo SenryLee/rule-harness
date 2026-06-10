@@ -4,7 +4,7 @@ info:
   description: 上传法律文件→后台抽取结构化规则。异步流程：upload 拿 batch_id → 轮询 status → 完成后取 rules.json。
   version: 1.0.0
 servers:
-  - url: https://rule-harness-demo.onrender.com
+  - url: https://api-rules.448898.xyz
 paths:
   /api/dify/upload:
     post:

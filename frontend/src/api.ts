@@ -14,6 +14,8 @@ export interface ConfigModels {
 
 export interface ConfigExtraction {
   granularity: 'fine' | 'balanced';
+  /** v1.2: 颗粒度档位 1(粗)–5(极细)，驱动切块/拆分/跳过门槛/去重/密度提示 */
+  granularity_level?: number;
   regulation_depth: 'full' | 'limited';
   consistency_sampling: boolean;
   industry_preset: string | null;
@@ -126,6 +128,7 @@ export interface FidelityStats {
 
 export interface BatchProgress {
   status: string;
+  cancel_requested?: boolean;
   current_step: string;
   total_files: number;
   processed_files: number;
@@ -357,6 +360,8 @@ export interface CreateBatchMeta {
   jurisdiction?: string;
   task_mode?: 'full_library' | 'template_focused' | 'template_strategy';
   scope_description?: string;
+  /** v1.2: 任务级颗粒度档位（1–5），覆盖全局默认 */
+  granularity_level?: number;
 }
 
 export interface PreviewClassifyResponse {
@@ -396,6 +401,9 @@ export interface DocumentClassification {
   source_priority: number;
   is_redline: boolean;
   is_case: boolean;
+  /** v1.2: LLM 与关键词预筛分歧且置信不足 → 需用户确认 */
+  needs_confirmation?: boolean;
+  alternative_genre?: string;
 }
 
 export interface DocumentProfile {
@@ -556,6 +564,18 @@ export function applyMerge(id: string): Promise<void> {
 export function deleteBatch(id: string): Promise<void> {
   return request<void>(`/api/batches/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+  });
+}
+
+export interface CancelBatchResponse {
+  batch_id: string;
+  status: string;
+  cancel_requested: boolean;
+}
+
+export function cancelBatch(id: string): Promise<CancelBatchResponse> {
+  return request<CancelBatchResponse>(`/api/batches/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
   });
 }
 

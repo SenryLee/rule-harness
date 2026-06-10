@@ -12,7 +12,8 @@ from backend.document_profile import profile_document
 
 PROFILES_DIR = PROJECT_ROOT / "profiles"
 
-_SOURCE_RULES: list[dict[str, Any]] = [
+# v1.2：词表统一迁移到 backend/classification/taxonomy.yaml；下面是加载失败的兜底。
+_FALLBACK_SOURCE_RULES: list[dict[str, Any]] = [
     {
         "label": "公司红线",
         "filename": ("红线", "底线", "退让", "不可接受", "谈判清单"),
@@ -52,6 +53,12 @@ _SOURCE_RULES: list[dict[str, Any]] = [
 ]
 
 _CASE_FILENAME_RX = re.compile(r"(?:^|[^\w])[^，。\n]{1,16}诉[^，。\n]{1,32}(?:纠纷|案)")
+
+
+def _source_rules() -> list[dict[str, Any]]:
+    from backend.classification import load_source_rules
+
+    return load_source_rules() or _FALLBACK_SOURCE_RULES
 
 _PROFILE_STRONG_KEYWORDS: dict[str, tuple[str, ...]] = {
     "建工·总包": (
@@ -100,23 +107,51 @@ _PARTY_RULES: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
-def extract_preview_text(filename: str, content: bytes, limit: int = 2048) -> str:
-    """Return a small text preview for heuristic classification.
+def extract_preview_text(filename: str, content: bytes, limit: int = 3000) -> str:
+    """Return preview text for classification（v1.2：头/中/尾多点采样）。
 
-    This function is intentionally best-effort. It never calls an LLM and falls
-    back to a decoded byte prefix when a parser dependency cannot read a file.
+    判决书的"本院认为"、法规的附则、手册的章节正文都在中后部——
+    只取头部 2048 字是旧版误判的最大来源。
+    本函数从不调用 LLM；解析依赖缺失时退回字节前缀解码。
     """
+    text, _ = extract_preview_sample(filename, content, limit)
+    return text
+
+
+def extract_preview_sample(
+    filename: str, content: bytes, limit: int = 3000
+) -> tuple[str, list[str]]:
+    """返回 (多点采样文本, 标题列表)。"""
     suffix = Path(filename).suffix.lower()
+    full_text = ""
+    headings: list[str] = []
     try:
         if suffix == ".docx":
-            return _docx_preview(content, limit)
-        if suffix == ".pdf":
-            return _pdf_preview(content, limit)
-        if suffix in {".xlsx", ".xlsm", ".xls", ".csv", ".tsv"}:
-            return _sheet_preview(filename, content, limit)
+            full_text, headings = _docx_full_text(content)
+        elif suffix == ".pdf":
+            full_text = _pdf_sample(content, limit)
+        elif suffix in {".xlsx", ".xlsm", ".xls", ".csv", ".tsv"}:
+            full_text = _sheet_preview(filename, content, limit)
     except Exception:
-        pass
-    return content[: limit * 4].decode("utf-8-sig", errors="replace")[:limit]
+        full_text = ""
+    if not full_text:
+        full_text = content[: limit * 8].decode("utf-8-sig", errors="replace")
+    return _sample_three_points(full_text, limit), headings
+
+
+def _sample_three_points(text: str, limit: int = 3000) -> str:
+    """头部 1500 + 中部 1000 + 尾部 500 字采样。"""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head_n = limit // 2          # 1500
+    mid_n = limit // 3           # 1000
+    tail_n = limit - head_n - mid_n  # 500
+    head = text[:head_n]
+    mid_start = max(head_n, (len(text) - mid_n) // 2)
+    mid = text[mid_start: mid_start + mid_n]
+    tail = text[-tail_n:]
+    return f"{head}\n……【中部采样】……\n{mid}\n……【尾部采样】……\n{tail}"
 
 
 def preview_classify_bytes(filename: str, content: bytes) -> dict[str, Any]:
@@ -128,15 +163,19 @@ async def preview_classify_with_llm(filename: str, content: bytes, router: objec
     """Full classification: keyword pre-screen + LLM (default path)."""
     from backend.classifier import classify_document, classification_to_dict
 
-    text = extract_preview_text(filename, content)
-    result = await classify_document(filename, text, router=router)
+    text, headings = extract_preview_sample(filename, content)
+    result = await classify_document(filename, text, router=router, headings=headings)
 
     # Also run legacy profile/contract/party detection for extra context
     contract_types, type_evidence, contract_confidence = _classify_profiles(filename, text)
     our_party, party_evidence, party_confidence = _classify_party(f"{filename}\n{text}")
     document_profile = profile_document(filename, text)
 
-    auto_apply_source = result.confidence >= _SOURCE_AUTO_THRESHOLD
+    # v1.2：分类有分歧（needs_confirmation）时不再静默自动应用，交给用户确认
+    auto_apply_source = (
+        not result.needs_confirmation
+        and result.confidence >= _SOURCE_AUTO_THRESHOLD
+    )
     auto_apply_contract = bool(contract_types) and contract_confidence >= _CONTRACT_AUTO_THRESHOLD
     auto_apply_party = party_confidence >= _PARTY_AUTO_THRESHOLD
 
@@ -154,8 +193,8 @@ async def preview_classify_with_llm(filename: str, content: bytes, router: objec
         "source_confidence": round(result.confidence, 2),
         "contract_confidence": round(contract_confidence, 2),
         "party_confidence": round(party_confidence, 2),
-        "auto_apply": True,
-        "auto_apply_source": True,
+        "auto_apply": auto_apply_source,
+        "auto_apply_source": auto_apply_source,
         "auto_apply_contract": auto_apply_contract,
         "auto_apply_party": auto_apply_party,
         "suggested_is_case": result.is_case,
@@ -206,40 +245,54 @@ def preview_classify_text(filename: str, text: str) -> dict[str, Any]:
     }
 
 
-def _docx_preview(content: bytes, limit: int) -> str:
+def _docx_full_text(content: bytes, max_chars: int = 60_000) -> tuple[str, list[str]]:
+    """全文（截断到 max_chars）+ 标题列表，供多点采样。"""
     import docx
 
     document = docx.Document(io.BytesIO(content))
     parts: list[str] = []
+    headings: list[str] = []
+    total = 0
     for paragraph in document.paragraphs:
         txt = paragraph.text.strip()
-        if txt:
-            parts.append(txt)
-        if sum(len(p) for p in parts) >= limit:
+        if not txt:
+            continue
+        style_name = str(paragraph.style.name) if paragraph.style else ""
+        if "Heading" in style_name and len(headings) < 30:
+            headings.append(txt[:60])
+        parts.append(txt)
+        total += len(txt)
+        if total >= max_chars:
             break
-    if sum(len(p) for p in parts) < limit:
+    if total < 2000:
         for table in document.tables:
             for row in table.rows:
                 cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
                 if cells:
                     parts.append(" | ".join(cells))
-                if sum(len(p) for p in parts) >= limit:
+                    total += len(parts[-1])
+                if total >= max_chars:
                     break
-            if sum(len(p) for p in parts) >= limit:
+            if total >= max_chars:
                 break
-    return "\n".join(parts)[:limit]
+    return "\n".join(parts), headings
 
 
-def _pdf_preview(content: bytes, limit: int) -> str:
+def _pdf_sample(content: bytes, limit: int) -> str:
+    """PDF 取首页 + 中间页 + 末页文本，供多点采样。"""
     import fitz
 
     doc = fitz.open(stream=content, filetype="pdf")
+    n = len(doc)
+    if n == 0:
+        return ""
+    page_indexes = sorted({0, n // 2, n - 1})
     parts: list[str] = []
-    for page in doc:
-        parts.append(page.get_text("text"))
-        if sum(len(p) for p in parts) >= limit:
+    for idx in page_indexes:
+        parts.append(doc[idx].get_text("text"))
+        if sum(len(p) for p in parts) >= limit * 4:
             break
-    return "\n".join(parts)[:limit]
+    return "\n".join(parts)
 
 
 def _sheet_preview(filename: str, content: bytes, limit: int) -> str:
@@ -266,7 +319,7 @@ def _classify_source(filename: str, text: str) -> tuple[str, str, float]:
     body_hits = _source_rule_hits(text, "body")
 
     scores: list[tuple[str, float, list[str]]] = []
-    for rule in _SOURCE_RULES:
+    for rule in _source_rules():
         label = str(rule["label"])
         fn_hits = filename_hits.get(label, [])
         txt_hits = body_hits.get(label, [])
@@ -294,7 +347,7 @@ def _classify_source(filename: str, text: str) -> tuple[str, str, float]:
 
 def _source_rule_hits(text: str, section: str) -> dict[str, list[str]]:
     hits: dict[str, list[str]] = {}
-    for rule in _SOURCE_RULES:
+    for rule in _source_rules():
         label = str(rule["label"])
         keywords = rule["filename"] if section == "filename" else rule["body"]
         matched = [kw for kw in keywords if kw and kw in text]
@@ -304,15 +357,20 @@ def _source_rule_hits(text: str, section: str) -> dict[str, list[str]]:
 
 
 def _classify_profiles(filename: str, text: str) -> tuple[list[str], list[str], float]:
+    """v1.2 去噪：泛词不计分；强关键词需 ≥2 个不同词命中才允许自动应用。"""
     scores: list[tuple[str, float, list[str]]] = []
+    distinct_strong: dict[str, int] = {}
     for profile in _load_profiles():
         hits: list[str] = []
         raw_score = 0.0
         label = str(profile["label"])
+        strong_hits = 0
 
         for word in _PROFILE_STRONG_KEYWORDS.get(label, ()):
             fn_count = filename.count(word)
             body_count = text.count(word)
+            if fn_count or body_count:
+                strong_hits += 1
             if fn_count:
                 raw_score += min(fn_count, 2) * 8
                 hits.append(f"文件名:{word}x{fn_count}")
@@ -322,28 +380,27 @@ def _classify_profiles(filename: str, text: str) -> tuple[list[str], list[str], 
                     hits.append(f"正文:{word}x{body_count}")
 
         for word in profile["vocabulary"]:
-            if not word:
-                continue
+            if not word or word in _GENERIC_PROFILE_TERMS:
+                continue  # 泛词（验收/服务/担保等）直接不计分
             fn_count = len(re.findall(re.escape(word), filename, flags=re.IGNORECASE))
             body_count = len(re.findall(re.escape(word), text, flags=re.IGNORECASE))
             if not fn_count and not body_count:
                 continue
-            if word in _GENERIC_PROFILE_TERMS:
-                raw_score += min(fn_count, 1) * 1.0 + min(body_count, 1) * 0.25
-            else:
-                raw_score += min(fn_count, 2) * 3 + min(body_count, 3) * 1.2
+            raw_score += min(fn_count, 2) * 3 + min(body_count, 3) * 1.2
             count = fn_count + body_count
             if count:
                 if len(hits) < 6:
                     hits.append(f"{word}x{count}")
         if label and label in filename:
             raw_score += 12
+            strong_hits += 1
             hits.insert(0, f"{label}x1")
         elif label and label in text:
             raw_score += 5
             hits.insert(0, f"{label}x1")
         if raw_score > 0:
             scores.append((label, raw_score, hits))
+            distinct_strong[label] = strong_hits
 
     scores.sort(key=lambda item: item[1], reverse=True)
     if not scores or scores[0][1] < 5:
@@ -365,6 +422,9 @@ def _classify_profiles(filename: str, text: str) -> tuple[list[str], list[str], 
     confidence = min(0.95, 0.38 + top_score / 32)
     if len(scores) > 1 and gap < 3:
         confidence = min(confidence, 0.58)
+    # v1.2：强关键词命中不足 2 个不同词 → 置信封顶在自动应用阈值之下（只建议不自动套用）
+    if distinct_strong.get(scores[0][0], 0) < 2:
+        confidence = min(confidence, _CONTRACT_AUTO_THRESHOLD - 0.05)
     return selected, evidence, confidence
 
 

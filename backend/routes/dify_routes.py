@@ -4,18 +4,23 @@
   1. POST /api/dify/upload — 接收 Dify HTTP 节点传入的文件，创建批次并触发抽取
   2. GET  /api/dify/batches/{batch_id}/status — 轮询批次状态（供 Dify 轮询节点）
   3. GET  /api/dify/batches/{batch_id}/rules.json — 下载规则 JSON（供 Dify 后续节点消费）
+  4. GET  /api/dify/batches/{batch_id}/wait — 服务端长轮询（v1.3，给 Dify 链式等待用）
 
 后续直接在此文件扩展 Dify 相关接口即可，不影响已有路由。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from fastapi import Query
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -223,6 +228,66 @@ async def dify_batch_status(batch_id: str):
         "summary": batch.get("summary", {}),
         "finished_at": batch.get("finished_at"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 2.5 服务端长轮询 — Dify 1.13.3 无 loop/wait 节点 + Cloudflare ~100s 硬超时的解法
+# ---------------------------------------------------------------------------
+
+# 单次长轮询的最大阻塞秒数。必须明显小于 Cloudflare 的 ~100s 网关超时，
+# 留出 TLS/排队余量。Dify 侧串 N 个 wait 节点即可接力等待 N*85 秒。
+_WAIT_MAX_TIMEOUT = 85
+_WAIT_POLL_INTERVAL = 2.0
+
+_TERMINAL_STATUSES = frozenset({"success", "partial", "failed", "merged"})
+
+
+@router.get("/batches/{batch_id}/wait")
+async def dify_batch_wait(
+    batch_id: str,
+    timeout: int = Query(default=80, ge=0, le=_WAIT_MAX_TIMEOUT),
+    include_rules: bool = Query(default=True),
+):
+    """阻塞至批次完成或 timeout 秒后返回（服务端长轮询）。
+
+    设计动机：抽取任务常跑 3–5 分钟，而公网走 Cloudflare 有 ~100s 硬超时，
+    同步接口必被掐断；Dify 1.13.3 又没有 loop/wait 节点没法在画布轮询。
+    解法：把"等待"放进服务端——本接口单次最多阻塞 85 秒（CF 安全线内），
+    Dify 工作流串联多个本接口的 HTTP 节点接力等待：
+      - 批次已完成 → 秒回（后续接力节点几乎零成本）；
+      - 批次运行中 → 阻塞到完成或超时，返回当前状态。
+
+    返回：
+      { batch_id, status, done, total_rules, summary,
+        rules: [...]  # 仅 done 且 include_rules=true 时返回 }
+    """
+    batch = state.batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    deadline = time.monotonic() + timeout
+    while (
+        state.batches[batch_id]["status"] not in _TERMINAL_STATUSES
+        and time.monotonic() < deadline
+    ):
+        await asyncio.sleep(_WAIT_POLL_INTERVAL)
+
+    batch = state.batches[batch_id]
+    status = batch["status"]
+    done = status in _TERMINAL_STATUSES
+    rules = state.batch_rules.get(batch_id, []) if done else []
+
+    payload: dict = {
+        "batch_id": batch_id,
+        "status": status,
+        "done": done,
+        "total_rules": len(rules),
+        "summary": batch.get("summary", {}),
+        "finished_at": batch.get("finished_at"),
+    }
+    if done and include_rules:
+        payload["rules"] = rules
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +561,37 @@ async def dify_openapi_schema():
                             "description": "upload 返回的批次 ID",
                             "schema": {"type": "string"},
                         }
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            },
+            "/api/dify/batches/{batch_id}/wait": {
+                "get": {
+                    "operationId": "waitBatch",
+                    "summary": "长轮询等待抽取完成（≤85秒/次，Cloudflare 安全）",
+                    "description": "阻塞至批次完成或 timeout 秒。完成时附带规则数组。Dify 工作流串联多个本接口节点即可接力等待数分钟的长任务。",
+                    "parameters": [
+                        {
+                            "name": "batch_id",
+                            "in": "path",
+                            "required": True,
+                            "description": "upload 返回的批次 ID",
+                            "schema": {"type": "string"},
+                        },
+                        {
+                            "name": "timeout",
+                            "in": "query",
+                            "required": False,
+                            "description": "单次最大阻塞秒数（0-85，默认80）",
+                            "schema": {"type": "integer", "default": 80},
+                        },
+                        {
+                            "name": "include_rules",
+                            "in": "query",
+                            "required": False,
+                            "description": "完成时是否附带规则数组（默认 true）",
+                            "schema": {"type": "boolean", "default": True},
+                        },
                     ],
                     "responses": {"200": {"description": "OK"}},
                 }

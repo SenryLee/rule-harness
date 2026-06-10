@@ -32,6 +32,26 @@ const TASK_MODES = [
   { value: 'template_strategy', label: '我方模板策略' },
 ] as const;
 
+// v1.2: 颗粒度档位 1–5（任务级，随本次任务下发，覆盖全局默认）
+const GRANULARITY_LABELS: Record<number, { label: string; desc: string }> = {
+  1: { label: '粗', desc: '只取强义务/高风险条款，约 0.5–1 条规则/千字' },
+  2: { label: '较粗', desc: '稳定口径为主，约 1–2 条/千字' },
+  3: { label: '平衡', desc: '默认档位，约 2–4 条/千字' },
+  4: { label: '细', desc: '少漏审优先，约 4–6 条/千字' },
+  5: { label: '极细', desc: '穷尽式拆解，约 6–10 条/千字' },
+};
+
+// 与后端 classifier._map_to_source_tag 保持一致（用于"分类需确认"时一键改选）
+const GENRE_TO_SOURCE_TAG: Record<string, string> = {
+  '法律法规': '法规',
+  '监管与司法文件': '法规',
+  '裁判文书': '案例',
+  '合同文本': '历史合同',
+  '企业内部文件': '内部制度',
+  '已有规则库': '标准条款库',
+  '专业参考资料': '业务规范',
+};
+
 interface UploadedFile {
   id: string;
   file: File;
@@ -78,11 +98,19 @@ export default function WorkbenchView() {
   const [taskMode, setTaskMode] = useState<CreateBatchMeta['task_mode']>('full_library');
   const [extractionDomain, setExtractionDomain] = useState('');
   const [scopeDescription, setScopeDescription] = useState('');
+  // v1.2: 任务级颗粒度档位（不写回全局配置）
+  const [granularityLevel, setGranularityLevel] = useState(3);
   const idCounter = useRef(0);
 
   useEffect(() => {
     fetchConfig()
-      .then(setConfig)
+      .then((cfg) => {
+        setConfig(cfg);
+        setGranularityLevel(
+          cfg.extraction.granularity_level
+            ?? (cfg.extraction.granularity === 'fine' ? 4 : 3),
+        );
+      })
       .catch(() => {});
   }, []);
 
@@ -231,6 +259,7 @@ export default function WorkbenchView() {
           is_case: clf?.is_case || false,
           task_mode: taskMode,
           scope_description: scopeDescription.trim(),
+          granularity_level: granularityLevel,
         };
       });
       const created = await createBatch(files.map((item) => item.file), meta);
@@ -243,7 +272,7 @@ export default function WorkbenchView() {
     } finally {
       setSubmitting(false);
     }
-  }, [canStart, config, configDirty, files, batchUpdated, onRefresh, scopeDescription, taskMode]);
+  }, [canStart, config, configDirty, files, batchUpdated, onRefresh, scopeDescription, taskMode, granularityLevel, extractionDomain]);
 
   const updateExtraction = useCallback((field: 'industry_preset' | 'granularity' | 'regulation_depth', value: string | null) => {
     setConfig((prev) =>
@@ -375,6 +404,26 @@ export default function WorkbenchView() {
                               ))}
                             </div>
                           )}
+                          {/* v1.2: 分类分歧需确认 — 高亮并给一键改选 */}
+                          {item.autoClass.classification?.needs_confirmation && (
+                            <div className="flex items-center gap-2 flex-wrap p-1.5 rounded-md bg-amber-50 border border-amber-200">
+                              <span className="text-[11px] font-semibold text-amber-700">
+                                分类需确认：AI 判为「{item.autoClass.classification.document_genre}」，
+                                关键词预筛判为「{item.autoClass.classification.alternative_genre}」
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const alt = item.autoClass?.classification?.alternative_genre || '';
+                                  const tag = GENRE_TO_SOURCE_TAG[alt];
+                                  if (tag) updateFileMeta(item.id, { source_tag: tag });
+                                }}
+                                className="px-2 py-0.5 rounded text-[11px] font-medium bg-white text-amber-700 border border-amber-300 hover:bg-amber-100"
+                              >
+                                改用「{item.autoClass.classification.alternative_genre}」
+                              </button>
+                            </div>
+                          )}
                           {/* Reasoning */}
                           {item.autoClass.classification?.reasoning && (
                             <div className="text-[11px] text-gray-400 truncate">
@@ -440,7 +489,7 @@ export default function WorkbenchView() {
               <div>
                 <div className="text-sm font-semibold text-gray-900">高级配置</div>
                 <div className="text-xs text-gray-400 mt-0.5">
-                  模式: {TASK_MODES.find((mode) => mode.value === taskMode)?.label || '全量规则沉淀'} ｜ 颗粒度: {config?.extraction.granularity || '-'} ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
+                  模式: {TASK_MODES.find((mode) => mode.value === taskMode)?.label || '全量规则沉淀'} ｜ 颗粒度: {granularityLevel}（{GRANULARITY_LABELS[granularityLevel]?.label}） ｜ 法规深度: {config?.extraction.regulation_depth || '-'}
                 </div>
               </div>
               <span className="text-sm text-primary">{batchConfigOpen ? '收起' : '展开'}</span>
@@ -461,16 +510,20 @@ export default function WorkbenchView() {
                     ))}
                   </select>
                 </label>
-                <label className="text-xs text-gray-500">
-                  抽取颗粒度
-                  <select
-                    value={config.extraction.granularity}
-                    onChange={(event) => updateExtraction('granularity', event.target.value)}
-                    className="select-field text-xs"
-                  >
-                    <option value="fine">精细</option>
-                    <option value="balanced">平衡</option>
-                  </select>
+                <label className="text-xs text-gray-500 md:col-span-2">
+                  抽取颗粒度：{granularityLevel} 档（{GRANULARITY_LABELS[granularityLevel]?.label}）
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    value={granularityLevel}
+                    onChange={(event) => setGranularityLevel(Number(event.target.value))}
+                    className="w-full mt-1 accent-primary"
+                  />
+                  <span className="block text-[11px] text-gray-400 mt-0.5">
+                    {GRANULARITY_LABELS[granularityLevel]?.desc}
+                  </span>
                 </label>
                 <label className="text-xs text-gray-500">
                   法规深度

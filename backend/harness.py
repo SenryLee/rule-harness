@@ -9,6 +9,9 @@ import yaml
 THEME_KEYS_PATH = Path(__file__).resolve().parent.parent / "theme_keys.yaml"
 
 CONNECTORS = ["且", "和", "并", "同时", "以及", "并且"]
+# v1.2：check_item 原子性判罚收窄到谓语级连接词。
+# "和/以及/并"在名词并列（如"设计和施工资质"）里大量误伤合法规则。
+STRICT_CONNECTORS = ["且", "并且", "同时"]
 NUMERIC_RX = re.compile(r"\d+(?:\.\d+)?%?")
 _NON_WORD_CJK_RX = re.compile(r"[^\w一-鿿㐀-䶿\U00020000-\U0002a6df]")
 
@@ -88,14 +91,14 @@ def validate_atomic(rule: dict) -> list[str]:
     if isinstance(keywords, str):
         keywords = [k.strip() for k in keywords.split(",") if k.strip()]
 
-    if len(check_item) > 30:
+    if len(check_item) > 40:
         failures.append("check_item_too_long")
     if len(requirement) > 200:
         failures.append("requirement_too_long")
     if len(notes) > 500:
         failures.append("notes_too_long")
 
-    if any(c in check_item for c in CONNECTORS):
+    if any(c in check_item for c in STRICT_CONNECTORS):
         failures.append("check_item_not_atomic")
 
     # 多阈值检测：同一数字重复出现不算冲突；至少 2 个不同的数字 token 才视为多阈值。
@@ -116,6 +119,27 @@ def validate_atomic(rule: dict) -> list[str]:
         failures.append("keyword_count_out_of_range")
 
     return failures
+
+
+def map_theme_key(raw_key: str) -> str:
+    """把模型输出的 theme_key 就近映射到白名单（v1.2）。
+
+    顺序：完全匹配 → 同前缀（前两段）白名单键 → 同一级前缀 → 原样返回。
+    映射不上时不再直接 struct fail，由调用方决定如何标记。
+    """
+    key = (raw_key or "").strip()
+    if not key or key in THEME_KEYS:
+        return key
+
+    segments = key.split(".")
+    if len(segments) >= 2:
+        prefix2 = ".".join(segments[:2]) + "."
+        for candidate in sorted(THEME_KEYS):
+            if candidate.startswith(prefix2):
+                return candidate
+    # 一级前缀兜底过于激进（会映射到语义无关的键），映射不上原样返回，
+    # 由调用方降级为 uncertainty 而非 struct fail。
+    return key
 
 
 def keyword_appears_in_excerpt(keyword: str, excerpt: str) -> bool:

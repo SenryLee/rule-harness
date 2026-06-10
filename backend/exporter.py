@@ -9,10 +9,29 @@ from pathlib import Path
 from .merger import MergeDecision
 from .parsers import RuleCandidate
 
+# v1.2：主 CSV 从 7 列扩为 10 列——三要素（假定条件/行为模式/法律后果）
+# 升级为主交付物的一部分，不再只藏在 metadata.csv。
 _MAIN_CSV_HEADERS = [
     "规则项id", "是否启用", "风险程度", "关键词",
     "检查项", "审查要求", "审查说明",
+    "假定条件", "行为模式", "法律后果",
 ]
+
+
+def _main_row(rule: RuleCandidate) -> list[str]:
+    keywords_str = ", ".join(rule.keywords) if rule.keywords else ""
+    return [
+        getattr(rule, "rule_id", ""),
+        getattr(rule, "enabled", "启用") or "启用",
+        rule.risk_level,
+        keywords_str,
+        rule.check_item,
+        rule.requirement,
+        rule.notes,
+        getattr(rule, "assumption", ""),
+        getattr(rule, "behavior_mode", ""),
+        getattr(rule, "consequence", ""),
+    ]
 
 
 def _partition_by_target(rules: list[RuleCandidate]) -> dict[str, list[RuleCandidate]]:
@@ -70,17 +89,7 @@ def export_main_csv(
         writer.writerow(_MAIN_CSV_HEADERS)
 
         for rule in rules:
-            keywords_str = ", ".join(rule.keywords) if rule.keywords else ""
-            enabled_label = getattr(rule, "enabled", "启用") or "启用"
-            writer.writerow([
-                getattr(rule, "rule_id", ""),
-                enabled_label,
-                rule.risk_level,
-                keywords_str,
-                rule.check_item,
-                rule.requirement,
-                rule.notes,
-            ])
+            writer.writerow(_main_row(rule))
 
 
 def export_placeholders_csv(
@@ -92,23 +101,35 @@ def export_placeholders_csv(
         writer = csv.writer(f)
         writer.writerow(_MAIN_CSV_HEADERS + ["占位说明", "原文片段"])
         for rule in rules:
-            keywords_str = ", ".join(rule.keywords) if rule.keywords else ""
             placeholder_reason = (
                 "阈值类型=占位"
                 if rule.threshold_type == "占位"
                 else f"低置信({rule.self_confidence:.2f})" if rule.self_confidence < 0.4
                 else "notes 含占位关键词"
             )
-            writer.writerow([
-                getattr(rule, "rule_id", ""),
-                getattr(rule, "enabled", "启用") or "启用",
-                rule.risk_level,
-                keywords_str,
-                rule.check_item,
-                rule.requirement,
-                rule.notes,
+            writer.writerow(_main_row(rule) + [
                 placeholder_reason,
                 rule.source_excerpt[:300],
+            ])
+
+
+def export_skipped_csv(
+    skipped_blocks: list[dict], output_path: Path
+) -> None:
+    """v1.2：被模型判为 informational 跳过的块，含模型给出的跳过理由。
+
+    让"漏抽"变得可审计——抽查这个文件即可发现误跳过的内容。
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["来源文件", "段落定位", "跳过理由", "原文片段"])
+        for item in skipped_blocks:
+            writer.writerow([
+                item.get("filename", ""),
+                item.get("location", ""),
+                item.get("skip_reason", ""),
+                str(item.get("excerpt", ""))[:300],
             ])
 
 

@@ -191,6 +191,25 @@ async def delete_batch(batch_id: str):
     return {"batch_id": batch_id, "deleted": True}
 
 
+@router.post("/batches/{batch_id}/cancel")
+async def cancel_batch(batch_id: str):
+    """协作式停止：置取消标志，编排器停止启动新文本块；已抽规则照常去重/合并/导出。"""
+    batch = state.batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    progress = state.batch_progress.get(batch_id)
+    if progress is None or batch.get("status") not in {"running", "pending", "stopping"}:
+        # 已结束或无进度对象：幂等返回当前状态
+        return {
+            "batch_id": batch_id,
+            "status": batch.get("status", "unknown"),
+            "cancel_requested": bool(progress and progress.cancel_requested),
+        }
+    progress.cancel_requested = True
+    batch["status"] = "stopping"
+    return {"batch_id": batch_id, "status": "stopping", "cancel_requested": True}
+
+
 # ---- Progress (polling + SSE) ----
 
 @router.get("/batches/{batch_id}/progress")
@@ -218,7 +237,7 @@ async def stream_batch_progress(batch_id: str):
             if current != last_json:
                 yield f"data: {current}\n\n"
                 last_json = current
-            if progress.status in ("success", "partial", "failed"):
+            if progress.status in ("success", "partial", "failed", "cancelled"):
                 break
             await asyncio.sleep(0.8)
 
@@ -289,6 +308,7 @@ _EXPORT_KEYS: dict[str, str] = {
     "discarded_csv": "discarded.csv",
     "negotiation_csv": "negotiation.csv",
     "out_of_scope_csv": "out_of_scope.csv",
+    "skipped_csv": "skipped_blocks.csv",
     "template_strategy_md": "template_strategy.md",
 }
 
@@ -352,6 +372,11 @@ async def export_negotiation(batch_id: str):
 @router.get("/batches/{batch_id}/exports/out-of-scope-csv")
 async def export_out_of_scope(batch_id: str):
     return _serve_export(batch_id, "out_of_scope_csv", "text/csv", f"{batch_id}_out_of_scope.csv")
+
+
+@router.get("/batches/{batch_id}/exports/skipped-csv")
+async def export_skipped(batch_id: str):
+    return _serve_export(batch_id, "skipped_csv", "text/csv", f"{batch_id}_skipped_blocks.csv")
 
 
 @router.get("/batches/{batch_id}/exports/template-strategy")

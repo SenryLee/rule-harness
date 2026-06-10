@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -37,6 +38,9 @@ class ExtractionConfig:
     industry_vocabulary: str
     industry_focus_points: str
     redline_keywords: tuple[str, ...]
+    # v1.2：颗粒度档位 1(粗)–5(极细)。旧 granularity 字符串保留兼容：
+    # fine→4，balanced→3。档位同时驱动切块大小/拆分策略/跳过门槛/去重/密度提示。
+    granularity_level: int = 3
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,14 @@ def _parse_model(raw: dict) -> ModelConfig:
     # 兼容 fallback 未配置时 provider: null 的 YAML 写法
     return ModelConfig(
         provider=raw.get("provider") or "",
-        api_key=raw.get("api_key") or "",
+        # config.yaml 留空时回退到环境变量，使密钥独立于配置文件：
+        # 容器重建、config.yaml 被重置或被前端误清空时 key 仍在。
+        api_key=(
+            raw.get("api_key")
+            or os.environ.get("RULE_HARNESS_API_KEY")
+            or os.environ.get("DASHSCOPE_API_KEY")
+            or ""
+        ),
         base_url=raw.get("base_url") or "",
         model=raw.get("model") or "",
         rpm_limit=int(raw.get("rpm_limit") or 60),
@@ -125,14 +136,21 @@ def _parse_model(raw: dict) -> ModelConfig:
 
 
 def _parse_extraction(raw: dict) -> ExtractionConfig:
+    legacy = raw.get("granularity", "balanced")
+    try:
+        level = int(raw.get("granularity_level") or (4 if legacy == "fine" else 3))
+    except (TypeError, ValueError):
+        level = 4 if legacy == "fine" else 3
+    level = max(1, min(5, level))
     return ExtractionConfig(
-        granularity=raw["granularity"],
+        granularity="fine" if level >= 4 else "balanced",
         regulation_depth=raw["regulation_depth"],
         consistency_sampling=raw["consistency_sampling"],
         industry_preset=raw.get("industry_preset"),
         industry_vocabulary=raw.get("industry_vocabulary", ""),
         industry_focus_points=raw.get("industry_focus_points", ""),
         redline_keywords=tuple(raw.get("redline_keywords", [])),
+        granularity_level=level,
     )
 
 
@@ -221,6 +239,7 @@ def _model_to_dict(model: ModelConfig) -> dict:
 def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
     return {
         "granularity": extraction.granularity,
+        "granularity_level": extraction.granularity_level,
         "regulation_depth": extraction.regulation_depth,
         "consistency_sampling": extraction.consistency_sampling,
         "industry_preset": extraction.industry_preset,

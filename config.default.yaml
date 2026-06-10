@@ -16,6 +16,8 @@ models:
 
 extraction:
   granularity: fine
+  # v1.2：颗粒度档位 1(粗)–5(极细)，驱动切块大小/拆分策略/跳过门槛/去重/密度提示
+  granularity_level: 4
   regulation_depth: full
   consistency_sampling: false
   industry_preset: null

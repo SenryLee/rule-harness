@@ -9,13 +9,37 @@ from .harness import compute_fingerprint
 from .parsers import RuleCandidate
 
 
+def _group_key(c: RuleCandidate, level: int) -> str:
+    """v1.2：去重合并阈值随颗粒度档位变化。
+
+    1-2 档（粗）：theme_key+subject 即视为同一规则（激进合并）；
+    3-4 档：现行五元组指纹；
+    5 档（极细）：五元组指纹 + requirement 中的数字集合（仅完全同口径才合并）。
+    """
+    from .harness import normalize_text
+
+    fp = compute_fingerprint(_candidate_to_dict(c))
+    if level <= 2:
+        return f"{normalize_text(c.theme_key)}|{normalize_text(c.subject)}"
+    # level>=3：5 元组指纹（theme+subject+predicate+threshold+direction）粒度太粗，
+    # 单一主题文档（如某法律某章）里大量原子规则会撞同一指纹被误折叠（如第663条
+    # 三种撤销情形 + 第658条任意撤销共享同指纹压成一条）。加入 check_item 归一化，
+    # 让不同审查口径各自成规则；同口径（同 check_item）仍正常合并去重/标冲突。
+    check = normalize_text(c.check_item)
+    if level >= 5:
+        import re
+        nums = "|".join(sorted(set(re.findall(r"\d+(?:\.\d+)?%?", c.requirement))))
+        return f"{fp}|{check}|{nums}"
+    return f"{fp}|{check}"
+
+
 def dedupe_with_priority(
     candidates: list[RuleCandidate], cfg: Config
 ) -> list[RuleCandidate]:
+    level = getattr(cfg.extraction, "granularity_level", 3) or 3
     groups: dict[str, list[RuleCandidate]] = defaultdict(list)
     for c in candidates:
-        key = compute_fingerprint(_candidate_to_dict(c))
-        groups[key].append(c)
+        groups[_group_key(c, level)].append(c)
 
     deduped: list[RuleCandidate] = []
     for fp, group in groups.items():

@@ -32,6 +32,8 @@ data/
 # Environment / secrets
 .env
 .env.local
+.env.secret
+*.secret
 
 # pytest
 .pytest_cache/

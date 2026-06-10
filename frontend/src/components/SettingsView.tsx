@@ -306,14 +306,26 @@ export default function SettingsView() {
         <div className="anim-fade-in-up space-y-4">
           <Card>
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              <Field label="抽取粒度">
-                <SelectInput
-                  value={config.extraction.granularity}
-                  onChange={(event) => setConfig({ ...config, extraction: { ...config.extraction, granularity: event.target.value as 'fine' | 'balanced' } })}
-                >
-                  <option value="fine">精细</option>
-                  <option value="balanced">平衡</option>
-                </SelectInput>
+              <Field label={`抽取颗粒度：${config.extraction.granularity_level ?? 3} 档（1 粗 — 5 极细）`}>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={config.extraction.granularity_level ?? 3}
+                  onChange={(event) => {
+                    const level = Number(event.target.value);
+                    setConfig({
+                      ...config,
+                      extraction: {
+                        ...config.extraction,
+                        granularity_level: level,
+                        granularity: level >= 4 ? 'fine' : 'balanced',
+                      },
+                    });
+                  }}
+                  className="w-full accent-[var(--accent)]"
+                />
               </Field>
               <Field label="法规深度">
                 <SelectInput

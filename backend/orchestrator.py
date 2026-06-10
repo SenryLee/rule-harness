@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import storage
+from .chunker import chunk_document, chunk_target_size
 from .config import Config, config_to_dict
 from .confidence import evaluate_confidence_batch
 from .dedupe import build_rule_ids, dedupe_with_priority
@@ -41,6 +42,7 @@ from .exporter import (
     export_negotiation_csv,
     export_out_of_scope_csv,
     export_placeholders_csv,
+    export_skipped_csv,
     export_summary_html,
     export_template_strategy_md,
 )
@@ -150,6 +152,14 @@ class BatchProgress:
     errors: list[str] = field(default_factory=list)
     pipeline_progress: dict[str, PipelineState] = field(default_factory=dict)
     fidelity_stats: FidelityStats = field(default_factory=FidelityStats)
+    # v1.2：被模型判为 informational 跳过的块（含 skip_reason），导出供抽查
+    skipped_blocks: list[dict] = field(default_factory=list)
+    # v1.2：每文件正文字符数 + 本批颗粒度档位，用于规则密度（under_extracted）校验
+    file_chars: dict[str, int] = field(default_factory=dict)
+    granularity_level: int = 3
+    # 协作式取消：取消接口置 True，编排器在每个文本块/管道前检查并停止启动新工作，
+    # 已抽规则照常去重/合并/导出，最终状态置 "cancelled"。
+    cancel_requested: bool = False
 
     def __post_init__(self) -> None:
         if not self.pipeline_progress:
@@ -161,6 +171,7 @@ class BatchProgress:
     def to_dict(self) -> dict:
         return {
             "status": self.status,
+            "cancel_requested": self.cancel_requested,
             "current_step": self.current_step,
             "total_files": self.total_files,
             "processed_files": self.processed_files,
@@ -176,6 +187,7 @@ class BatchProgress:
                 if pipeline_id in self.pipeline_progress
             },
             "fidelity_stats": self.fidelity_stats.to_dict(),
+            "skipped_blocks": len(self.skipped_blocks),
         }
 
     def prepare_pipeline_progress(self, docs: list[ParsedDocument], instances: list[object]) -> None:
@@ -350,7 +362,8 @@ async def _parse_one(file_path: Path, meta: dict) -> ParsedDocument:
 
 
 async def _parse_all(file_metas: list[dict], batch_dir: Path,
-                     progress: BatchProgress, max_concurrency: int) -> list[ParsedDocument]:
+                     progress: BatchProgress, max_concurrency: int,
+                     chunk_chars: int = 2000) -> list[ParsedDocument]:
     sem = asyncio.Semaphore(max(1, max_concurrency))
 
     async def gated(meta: dict) -> ParsedDocument:
@@ -358,6 +371,8 @@ async def _parse_all(file_metas: list[dict], batch_dir: Path,
             path = batch_dir / meta["filename"]
             try:
                 doc = await _parse_one(path, meta)
+                # v1.2：段落级块聚合为语义块（按"条/标题"边界，目标块大小随颗粒度档位）
+                doc = chunk_document(doc, chunk_chars)
             except Exception as exc:
                 logger.exception("Failed to parse %s", path)
                 progress.errors.append(f"parse_failed:{path.name}:{exc}")
@@ -378,11 +393,39 @@ async def _parse_all(file_metas: list[dict], batch_dir: Path,
                 )
             progress.processed_files += 1
             progress.total_blocks += len(doc.blocks)
+            progress.file_chars[doc.filename] = sum(len(b.text) for b in doc.blocks)
             for warning in getattr(doc, "parse_warnings", ()) or ():
                 progress.errors.append(f"parse_warning:{doc.filename}:{warning}")
             return doc
 
     return await asyncio.gather(*[gated(m) for m in file_metas])
+
+
+# ---------------------------------------------------------------------------
+# Task-level config overrides
+# ---------------------------------------------------------------------------
+
+
+def _apply_task_overrides(cfg: Config, file_metas: list[dict]) -> Config:
+    """任务级配置覆盖全局默认（目前只有颗粒度档位）。"""
+    from dataclasses import replace as dc_replace
+
+    first = file_metas[0] if file_metas else {}
+    raw_level = first.get("granularity_level")
+    if raw_level is None:
+        return cfg
+    try:
+        level = max(1, min(5, int(raw_level)))
+    except (TypeError, ValueError):
+        return cfg
+    if level == cfg.extraction.granularity_level:
+        return cfg
+    extraction = dc_replace(
+        cfg.extraction,
+        granularity_level=level,
+        granularity="fine" if level >= 4 else "balanced",
+    )
+    return dc_replace(cfg, extraction=extraction)
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +599,8 @@ async def _run_pipelines(
             units = _pipeline_units(pipeline_id, doc)
             if units <= 0:
                 return []
+            if progress.cancel_requested:  # 已请求停止：不再启动新管道
+                return []
             progress.mark_pipeline_running(pipeline_id, doc.filename)
             try:
                 out = await pipeline.extract(doc, ctx)
@@ -707,6 +752,7 @@ def _do_exports(
     decisions: list[MergeDecision],
     batch_id: str,
     exports_dir: Path,
+    skipped_blocks: list[dict] | None = None,
 ) -> dict[str, Path]:
     """v1.1: 按 output_target 分桶导出。
 
@@ -744,6 +790,9 @@ def _do_exports(
     if buckets.get("out_of_scope"):
         paths["out_of_scope_csv"] = exports_dir / "out_of_scope.csv"
         export_out_of_scope_csv(buckets["out_of_scope"], paths["out_of_scope_csv"])
+    if skipped_blocks:
+        paths["skipped_csv"] = exports_dir / "skipped_blocks.csv"
+        export_skipped_csv(skipped_blocks, paths["skipped_csv"])
     if any(getattr(rule, "task_mode", "") == "template_strategy" for rule in rules):
         paths["template_strategy_md"] = exports_dir / "template_strategy.md"
         export_template_strategy_md(rules, paths["template_strategy_md"])
@@ -866,6 +915,7 @@ async def run_batch(
     a :class:`BatchProgress` instance whose ``status`` will be flipped to ``success``
     or ``partial`` here.
     """
+    cfg = _apply_task_overrides(cfg, file_metas)
     router = create_llm_router(cfg)
     router.usage_callback = progress.add_token_usage
     progress.total_files = len(file_metas)
@@ -880,30 +930,45 @@ async def run_batch(
         for meta in file_metas
     ]
 
-    progress.current_step = "parsing"
-    docs = await _parse_all(parse_metas, batch_dir, progress, cfg.concurrency.files)
-    scope = _build_task_scope(file_metas, docs)
+    progress.granularity_level = cfg.extraction.granularity_level
 
-    progress.current_step = "extracting"
-    candidates = await _run_pipelines(docs, router, cfg, progress, scope)
-    candidates = _apply_task_scope(candidates, scope)
+    try:
+        progress.current_step = "parsing"
+        chunk_chars = chunk_target_size(cfg.extraction.granularity_level)
+        docs = await _parse_all(
+            parse_metas, batch_dir, progress, cfg.concurrency.files, chunk_chars
+        )
+        scope = _build_task_scope(file_metas, docs)
 
-    progress.current_step = "finalizing"
-    rules = _finalize(candidates, cfg)
-    progress.total_rules = len(rules)
-    _update_fidelity_stats(progress, rules)
+        progress.current_step = "extracting"
+        candidates = await _run_pipelines(docs, router, cfg, progress, scope)
+        candidates = _apply_task_scope(candidates, scope)
 
-    progress.current_step = "merging"
-    decisions = _decide_merges(rules, batch_id)
+        progress.current_step = "finalizing"
+        rules = _finalize(candidates, cfg)
+        progress.total_rules = len(rules)
+        _update_fidelity_stats(progress, rules)
 
-    progress.current_step = "exporting"
-    exports = _do_exports(rules, decisions, batch_id, exports_dir)
+        progress.current_step = "merging"
+        decisions = _decide_merges(rules, batch_id)
 
-    progress.current_step = "persisting"
-    _persist(rules, decisions, batch_id, cfg)
+        progress.current_step = "exporting"
+        exports = _do_exports(rules, decisions, batch_id, exports_dir,
+                              skipped_blocks=progress.skipped_blocks)
+
+        progress.current_step = "persisting"
+        _persist(rules, decisions, batch_id, cfg)
+    finally:
+        try:
+            await router.aclose()
+        except Exception:
+            logger.debug("router close failed", exc_info=True)
 
     progress.current_step = "done"
-    progress.status = "success" if not progress.errors else "partial"
+    if progress.cancel_requested:
+        progress.status = "cancelled"
+    else:
+        progress.status = "success" if not progress.errors else "partial"
 
     summary = _build_summary(rules, decisions, progress)
     return BatchResult(
@@ -961,8 +1026,34 @@ def _build_extraction_completeness(
         "total_blocks": progress.total_blocks,
         "rules_per_file": rules_per_file,
         "low_output_files": _low_output_files(rules_per_file, progress),
+        "under_extracted_files": _under_extracted_files(rules_per_file, progress),
+        "skipped_blocks": len(progress.skipped_blocks),
         "pipeline_coverage": _pipeline_coverage(progress),
     }
+
+
+def _under_extracted_files(
+    rules_per_file: dict[str, int], progress: BatchProgress
+) -> list[dict]:
+    """v1.2：规则密度低于颗粒度档位下限的文件，标记复查。"""
+    from .pipelines.p1_body import GRANULARITY_DENSITY
+
+    low_bound, _ = GRANULARITY_DENSITY.get(progress.granularity_level, (2.0, 4.0))
+    out: list[dict] = []
+    for filename, rules_count in sorted(rules_per_file.items()):
+        chars = progress.file_chars.get(filename, 0)
+        if chars < 500:
+            continue  # 太短的文件密度统计无意义（法规等高密度短文件仍需校验）
+        density = rules_count / (chars / 1000)
+        if density < low_bound:
+            out.append({
+                "filename": filename,
+                "chars": chars,
+                "rules": rules_count,
+                "density_per_1000_chars": round(density, 2),
+                "expected_min": low_bound,
+            })
+    return out
 
 
 def _rules_per_file(rules: list[RuleCandidate], progress: BatchProgress) -> dict[str, int]:

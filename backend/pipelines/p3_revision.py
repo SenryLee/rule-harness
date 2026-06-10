@@ -66,26 +66,53 @@ class P3RevisionPipeline:
 
         out: list[RuleCandidate] = []
 
-        # fallback_clauses 转 RuleCandidate with [FALLBACK] notes
+        # fallback_clauses 转结构完整的 RuleCandidate（三要素齐全），notes 以 [FALLBACK] 承载替代口径。
+        # 若 dedupe 未能并入主规则也会作为低优先级独立规则呈现，必须自身可读、可审计——
+        # 不得出现英文 theme_key 叶子泄漏、三要素留空等"半成品"规则。
         for fc in obj.get("fallback_clauses", []) or []:
             theme_key = str(fc.get("theme_key", ""))
             if not theme_key:
                 continue
-            note = (f"[FALLBACK] 原口径={fc.get('original_position','')}; "
-                    f"可接受替代={fc.get('fallback_position','')}; "
-                    f"主体={fc.get('subject','')}")
+            original_pos = str(fc.get("original_position", "")).strip()
+            fallback_pos = str(fc.get("fallback_position", "")).strip()
+            subject = str(fc.get("subject", "")).strip()
+            topic = theme_key.split(".")[-1]
+            change_desc = (
+                f"「{original_pos}」→「{fallback_pos}」"
+                if (original_pos or fallback_pos)
+                else "见原文/修订后对比"
+            )
+            note = (f"[FALLBACK] 原口径={original_pos}; "
+                    f"可接受替代={fallback_pos}; 主体={subject}")
+            keywords = tuple(
+                k for k in (subject, original_pos, fallback_pos) if k
+            )[:5] or (topic,)
             out.append(RuleCandidate(
                 risk_level="中",
-                keywords=(theme_key.split(".")[-1],),
-                check_item=f"可接受替代方案：{fc.get('theme_key','').split('.')[-1]}"[:30],
-                requirement=f"[条款] 已存在替代口径：{fc.get('fallback_position','')}"[:200],
+                keywords=keywords,
+                check_item=f"修订变更是否接受：{change_desc}"[:40],
+                requirement=(
+                    f"[条款] 该条款经修订由「{original_pos}」调整为「{fallback_pos}」，"
+                    "审查时确认己方是否接受此变更/让步"
+                )[:200],
                 notes=note,
                 rule_type="clause",
                 theme_key=theme_key,
-                subject=str(fc.get("subject", "")),
+                subject=subject,
                 predicate="可接受替代",
                 threshold_type="无",
                 direction="正向",
+                assumption=(
+                    f"合同就「{topic}」相关条款存在修订（{change_desc}）且需确认己方立场时适用。"
+                ),
+                behavior_mode=(
+                    f"审查人应核对该条款由「{original_pos}」改为「{fallback_pos}」的变更，"
+                    "确认是否为己方可接受的让步。"
+                ),
+                consequence=(
+                    "原文未规定后果；实务风险：未经确认即接受对方修订，"
+                    "可能引入不利让步或改变己方权利义务。"
+                ),
                 source_excerpt=f"原文: {rev.original_text}\n修订后: {rev.revised_text}",
                 source_location=rev.location,
                 pipeline=self.pipeline_id,
