@@ -350,6 +350,15 @@ export function saveProfile(name: string, config: Config): Promise<void> {
   });
 }
 
+/** v1.3: 任务级 extraction 覆盖（白名单，见后端 _apply_task_overrides） */
+export interface ExtractionOverrides {
+  granularity_level?: number;
+  regulation_depth?: 'full' | 'limited';
+  consistency_sampling?: boolean;
+  industry_vocabulary?: string;
+  industry_focus_points?: string;
+}
+
 export interface CreateBatchMeta {
   source_tag: string;
   contract_types: string[];
@@ -362,6 +371,42 @@ export interface CreateBatchMeta {
   scope_description?: string;
   /** v1.2: 任务级颗粒度档位（1–5），覆盖全局默认 */
   granularity_level?: number;
+  /** v1.3: 任务级 extraction 覆盖（仅 meta[0] 生效） */
+  extraction_overrides?: ExtractionOverrides;
+}
+
+// ── Task presets（任务配置预设） ────────────────────────────────────
+
+export interface TaskPresetSettings extends ExtractionOverrides {
+  task_mode?: 'full_library' | 'template_focused' | 'template_strategy';
+  scope_description?: string;
+  our_party?: string;
+  jurisdiction?: string;
+  industry_preset?: string | null;
+}
+
+export interface TaskPreset {
+  name: string;
+  settings: TaskPresetSettings;
+  updated_at?: string;
+}
+
+export function fetchTaskPresets(): Promise<TaskPreset[]> {
+  return request<TaskPreset[]>('/api/task-presets');
+}
+
+export function saveTaskPreset(name: string, settings: TaskPresetSettings): Promise<TaskPreset> {
+  return request<TaskPreset>(`/api/task-presets/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings }),
+  });
+}
+
+export function deleteTaskPreset(name: string): Promise<void> {
+  return request<void>(`/api/task-presets/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
 }
 
 export interface PreviewClassifyResponse {
