@@ -407,25 +407,51 @@ async def _parse_all(file_metas: list[dict], batch_dir: Path,
 
 
 def _apply_task_overrides(cfg: Config, file_metas: list[dict]) -> Config:
-    """任务级配置覆盖全局默认（目前只有颗粒度档位）。"""
+    """任务级配置覆盖全局默认。
+
+    v1.3：除颗粒度档位外，支持 meta[0].extraction_overrides 白名单字段：
+        granularity_level     1–5 档位（与顶层 granularity_level 等价，后者优先）
+        regulation_depth      "full" | "limited"
+        consistency_sampling  bool
+        industry_vocabulary   str（行业词表，覆盖全局）
+        industry_focus_points str（行业关注要点，覆盖全局）
+    未提供的字段保持全局配置不变。
+    """
     from dataclasses import replace as dc_replace
 
     first = file_metas[0] if file_metas else {}
-    raw_level = first.get("granularity_level")
-    if raw_level is None:
-        return cfg
+    overrides = first.get("extraction_overrides")
+    overrides = dict(overrides) if isinstance(overrides, dict) else {}
+
+    # 顶层 granularity_level 优先（向后兼容旧前端）
+    raw_level = first.get("granularity_level", overrides.get("granularity_level"))
+
+    changes: dict = {}
     try:
-        level = max(1, min(5, int(raw_level)))
+        if raw_level is not None:
+            level = max(1, min(5, int(raw_level)))
+            if level != cfg.extraction.granularity_level:
+                changes["granularity_level"] = level
+                changes["granularity"] = "fine" if level >= 4 else "balanced"
     except (TypeError, ValueError):
+        pass
+
+    depth = overrides.get("regulation_depth")
+    if depth in ("full", "limited") and depth != cfg.extraction.regulation_depth:
+        changes["regulation_depth"] = depth
+
+    sampling = overrides.get("consistency_sampling")
+    if isinstance(sampling, bool) and sampling != cfg.extraction.consistency_sampling:
+        changes["consistency_sampling"] = sampling
+
+    for key in ("industry_vocabulary", "industry_focus_points"):
+        value = overrides.get(key)
+        if isinstance(value, str) and value.strip():
+            changes[key] = value.strip()
+
+    if not changes:
         return cfg
-    if level == cfg.extraction.granularity_level:
-        return cfg
-    extraction = dc_replace(
-        cfg.extraction,
-        granularity_level=level,
-        granularity="fine" if level >= 4 else "balanced",
-    )
-    return dc_replace(cfg, extraction=extraction)
+    return dc_replace(cfg, extraction=dc_replace(cfg.extraction, **changes))
 
 
 # ---------------------------------------------------------------------------

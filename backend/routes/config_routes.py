@@ -1,6 +1,10 @@
 """Config & profile routes."""
 from __future__ import annotations
 
+import json
+import re
+from datetime import datetime, timezone
+
 import yaml
 from fastapi import APIRouter, HTTPException
 from pathlib import Path
@@ -16,6 +20,8 @@ from ..config import (
 
 router = APIRouter(prefix="/api", tags=["config"])
 PROFILES_DIR = PROJECT_ROOT / "profiles"
+# 任务配置预设：放 data/（服务器上是持久卷，不进 git）
+TASK_PRESETS_PATH = PROJECT_ROOT / "data" / "task_presets.json"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -142,3 +148,81 @@ async def delete_profile(name: str):
             p.unlink()
             return {"name": name, "deleted": True}
     raise HTTPException(status_code=404, detail=f"Profile not found: {name}")
+
+
+# ---- Task presets（任务配置预设：颗粒度/任务模式/行业覆盖等） ----
+
+_PRESET_NAME_RX = re.compile(r"^[\w一-鿿·\- ]{1,40}$")
+# 白名单：预设里只允许存这些字段，杜绝任意 JSON 注入到任务 meta
+_PRESET_ALLOWED_KEYS = frozenset({
+    "granularity_level", "task_mode", "scope_description", "our_party",
+    "jurisdiction", "industry_preset",
+    "regulation_depth", "consistency_sampling",
+    "industry_vocabulary", "industry_focus_points",
+})
+
+
+def _load_task_presets() -> dict:
+    try:
+        raw = json.loads(TASK_PRESETS_PATH.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_task_presets(presets: dict) -> None:
+    TASK_PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TASK_PRESETS_PATH.write_text(
+        json.dumps(presets, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _sanitize_preset(payload: dict) -> dict:
+    cleaned = {k: v for k, v in payload.items() if k in _PRESET_ALLOWED_KEYS}
+    if "granularity_level" in cleaned:
+        try:
+            cleaned["granularity_level"] = max(1, min(5, int(cleaned["granularity_level"])))
+        except (TypeError, ValueError):
+            cleaned.pop("granularity_level")
+    if cleaned.get("task_mode") not in (
+        "full_library", "template_focused", "template_strategy", None,
+    ):
+        cleaned.pop("task_mode", None)
+    if cleaned.get("regulation_depth") not in ("full", "limited", None):
+        cleaned.pop("regulation_depth", None)
+    return cleaned
+
+
+@router.get("/task-presets")
+async def list_task_presets():
+    presets = _load_task_presets()
+    return [
+        {"name": name, **entry}
+        for name, entry in sorted(presets.items())
+    ]
+
+
+@router.put("/task-presets/{name}")
+async def save_task_preset(name: str, payload: dict):
+    if not _PRESET_NAME_RX.match(name):
+        raise HTTPException(status_code=422, detail="预设名只允许中英文/数字/空格/中点/横线，≤40字")
+    settings = _sanitize_preset(payload.get("settings", payload))
+    if not settings:
+        raise HTTPException(status_code=422, detail="预设内容为空或无有效字段")
+    presets = _load_task_presets()
+    presets[name] = {
+        "settings": settings,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_task_presets(presets)
+    return {"name": name, "saved": True, "settings": settings}
+
+
+@router.delete("/task-presets/{name}")
+async def delete_task_preset(name: str):
+    presets = _load_task_presets()
+    if name not in presets:
+        raise HTTPException(status_code=404, detail=f"Preset not found: {name}")
+    presets.pop(name)
+    _save_task_presets(presets)
+    return {"name": name, "deleted": True}
