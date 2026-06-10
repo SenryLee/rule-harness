@@ -17,7 +17,7 @@ const navItems = [
 
 export default function Sidebar() {
   return (
-    <aside className="flex w-[220px] flex-shrink-0 flex-col border-r border-[var(--border-light)] bg-[var(--bg-surface)]">
+    <aside className="glass-panel z-10 flex w-[220px] flex-shrink-0 flex-col border-r border-[var(--glass-border)]">
       {/* Logo */}
       <div className="px-5 py-6">
         <h1 className="text-[17px] font-semibold tracking-tight text-[var(--text-primary)]">

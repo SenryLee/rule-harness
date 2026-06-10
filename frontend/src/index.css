@@ -8,35 +8,44 @@
 
 @layer base {
   :root {
-    /* Apple-inspired neutral palette */
-    --color-black: #1d1d1f;
-    --color-gray-1: #424245;
-    --color-gray-2: #6e6e73;
-    --color-gray-3: #86868b;
-    --color-gray-4: #d2d2d7;
-    --color-gray-5: #f5f5f7;
-    --color-gray-6: #fbfbfd;
+    /* ── Anthropic-inspired warm palette ──────────────
+       米白纸感底色 + 陶土橘 accent，无纯黑无纯灰蓝 */
+    --color-black: #1f1e1b;
+    --color-gray-1: #4a463d;
+    --color-gray-2: #6e695e;
+    --color-gray-3: #8a8578;
+    --color-gray-4: #d9d2c5;
+    --color-gray-5: #f0ebe2;
+    --color-gray-6: #f8f5ee;
     --color-white: #ffffff;
 
-    /* Single accent */
-    --color-blue: #0071e3;
-    --color-blue-hover: #147ce5;
-    --color-blue-soft: rgba(0, 113, 227, 0.08);
+    /* Accent — 陶土橘（book cloth） */
+    --color-accent: #c96442;
+    --color-accent-hover: #b5552f;
+    --color-accent-soft: rgba(201, 100, 66, 0.1);
 
-    /* Semantic */
-    --color-red: #bf4800;
-    --color-amber: #b25000;
-    --color-green: #007a3d;
-    --color-red-soft: rgba(191, 72, 0, 0.08);
-    --color-amber-soft: rgba(178, 80, 0, 0.08);
-    --color-green-soft: rgba(0, 122, 61, 0.08);
+    /* 兼容别名：旧组件用的 --color-blue 全部跟随 accent */
+    --color-blue: var(--color-accent);
+    --color-blue-hover: var(--color-accent-hover);
+    --color-blue-soft: var(--color-accent-soft);
+
+    /* Semantic（暖调语义色） */
+    --color-red: #ab2b3f;
+    --color-amber: #966c1e;
+    --color-green: #3f7d54;
+    --color-red-soft: rgba(171, 43, 63, 0.09);
+    --color-amber-soft: rgba(150, 108, 30, 0.1);
+    --color-green-soft: rgba(63, 125, 84, 0.1);
 
     /* Layout */
-    --bg: var(--color-gray-5);
-    --bg-surface: var(--color-white);
-    --bg-hover: var(--color-gray-5);
-    --border: var(--color-gray-4);
-    --border-light: #e8e8ed;
+    --bg: #f3efe6;
+    --bg-surface: rgba(255, 255, 255, 0.62);
+    --bg-surface-solid: #fdfcf9;
+    --bg-hover: rgba(255, 255, 255, 0.55);
+    --border: rgba(31, 30, 27, 0.12);
+    --border-light: rgba(31, 30, 27, 0.07);
+    --glass-border: rgba(255, 255, 255, 0.65);
+    --glass-highlight: rgba(255, 255, 255, 0.85);
 
     /* Text */
     --text-primary: var(--color-black);
@@ -44,9 +53,19 @@
     --text-muted: var(--color-gray-3);
 
     /* Radius */
-    --radius-sm: 6px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+
+    /* Glass shadows */
+    --shadow-glass:
+      0 1px 1px rgba(31, 30, 27, 0.03),
+      0 4px 16px rgba(31, 30, 27, 0.06),
+      inset 0 1px 0 var(--glass-highlight);
+    --shadow-glass-lg:
+      0 2px 4px rgba(31, 30, 27, 0.04),
+      0 16px 48px rgba(31, 30, 27, 0.12),
+      inset 0 1px 0 var(--glass-highlight);
 
     /* Timing */
     --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
@@ -73,9 +92,30 @@
     line-height: 1.6;
   }
 
+  /* ── 环境光斑：液态玻璃的「景深」来源 ─────────────
+     固定在视口的柔和色斑，毛玻璃面板叠在上面才有折射感 */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(560px 420px at 12% -6%, rgba(201, 100, 66, 0.16), transparent 64%),
+      radial-gradient(640px 480px at 94% 12%, rgba(150, 142, 100, 0.16), transparent 62%),
+      radial-gradient(720px 560px at 76% 96%, rgba(201, 100, 66, 0.1), transparent 60%),
+      radial-gradient(480px 420px at 4% 82%, rgba(124, 145, 168, 0.12), transparent 62%),
+      linear-gradient(180deg, #f7f3ea 0%, #f3efe6 48%, #efe9dd 100%);
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
   ::selection {
-    background: var(--color-blue-soft);
-    color: var(--color-blue);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
   }
 
   ::-webkit-scrollbar {
@@ -88,26 +128,49 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--color-gray-4);
+    background: rgba(31, 30, 27, 0.16);
     border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--color-gray-3);
+    background: rgba(31, 30, 27, 0.28);
   }
 }
 
 @layer components {
+  /* ── Glass primitives ───────────────────────────── */
+
+  .glass-panel {
+    background: linear-gradient(155deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.45));
+    backdrop-filter: blur(28px) saturate(160%);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-glass);
+  }
+
+  .glass-chip {
+    @apply inline-flex items-center rounded-full;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    box-shadow: 0 1px 4px rgba(31, 30, 27, 0.05);
+  }
+
   /* ── Buttons ─────────────────────────────────────── */
 
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-2.5 text-sm font-semibold
            transition-all;
-    background: var(--color-blue);
+    background: linear-gradient(180deg, #d4744f, var(--color-accent));
     color: white;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow:
+      0 2px 10px rgba(201, 100, 66, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
   }
   .btn-primary:hover {
-    background: var(--color-blue-hover);
+    background: linear-gradient(180deg, #c9633e, var(--color-accent-hover));
   }
   .btn-primary:active {
     transform: scale(0.97);
@@ -121,16 +184,24 @@
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-2.5 text-sm font-medium
            transition-all;
-    background: var(--bg-surface);
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
     color: var(--text-secondary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-glass);
   }
   .btn-secondary:hover {
-    background: var(--bg-hover);
+    background: rgba(255, 255, 255, 0.78);
     color: var(--text-primary);
   }
   .btn-secondary:active {
     transform: scale(0.97);
+  }
+  .btn-secondary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
   }
 
   .btn-ghost {
@@ -143,22 +214,30 @@
     color: var(--text-primary);
   }
 
-  /* ── Cards ───────────────────────────────────────── */
+  /* ── Cards：液态玻璃 ─────────────────────────────── */
 
   .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-light);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.46));
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
-    transition: transform var(--dur-normal) ease-out;
+    box-shadow: var(--shadow-glass);
+    transition:
+      transform var(--dur-normal) var(--ease-out),
+      box-shadow var(--dur-normal) var(--ease-out);
   }
   .card-hover:hover {
     transform: translateY(-2px);
+    box-shadow: var(--shadow-glass-lg);
   }
 
   /* ── Badges ──────────────────────────────────────── */
 
   .badge {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
   }
   .badge-danger {
     @apply badge;
@@ -177,8 +256,8 @@
   }
   .badge-info {
     @apply badge;
-    background: var(--color-blue-soft);
-    color: var(--color-blue);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
   }
 
   /* ── Inputs ──────────────────────────────────────── */
@@ -186,17 +265,20 @@
   .input-field {
     @apply block w-full rounded-btn px-3 py-2.5 text-sm;
     border: 1px solid var(--border);
-    background: var(--bg-surface);
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     color: var(--text-primary);
-    transition: border-color var(--dur-fast) ease;
+    transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
   }
   .input-field::placeholder {
     color: var(--color-gray-3);
   }
   .input-field:focus {
     outline: none;
-    border-color: var(--color-blue);
-    box-shadow: 0 0 0 3px var(--color-blue-soft);
+    border-color: var(--color-accent);
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
   }
 
   /* ── Sidebar Navigation ──────────────────────────── */
@@ -206,13 +288,15 @@
     color: var(--text-muted);
   }
   .nav-item:hover {
-    background: var(--bg-hover);
+    background: rgba(255, 255, 255, 0.6);
     color: var(--text-primary);
   }
   .nav-item.active {
-    background: var(--color-blue-soft);
-    color: var(--color-blue);
+    background: rgba(255, 255, 255, 0.75);
+    color: var(--color-accent);
     font-weight: 600;
+    box-shadow: var(--shadow-glass);
+    border: 1px solid var(--glass-border);
   }
 
   /* ── Command Palette ─────────────────────────────── */
@@ -225,18 +309,20 @@
     justify-content: center;
     align-items: flex-start;
     padding-top: 20vh;
-    background: rgba(0, 0, 0, 0.12);
-    backdrop-filter: blur(4px);
+    background: rgba(60, 52, 40, 0.18);
+    backdrop-filter: blur(6px);
     animation: fadeIn var(--dur-fast) ease;
   }
 
   .cmd-palette {
     width: min(560px, calc(100vw - 32px));
     overflow: hidden;
-    border: 1px solid var(--border-light);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
-    background: var(--bg-surface);
-    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78));
+    backdrop-filter: blur(32px) saturate(170%);
+    -webkit-backdrop-filter: blur(32px) saturate(170%);
+    box-shadow: var(--shadow-glass-lg);
     animation: slideDown var(--dur-normal) var(--ease-apple);
   }
 
@@ -247,7 +333,7 @@
     padding: 0 5px;
     border: 1px solid var(--border);
     border-radius: 4px;
-    background: var(--color-gray-5);
+    background: rgba(255, 255, 255, 0.6);
     color: var(--color-gray-3);
     font-family: 'SF Mono', 'JetBrains Mono', monospace;
     font-size: 10px;
