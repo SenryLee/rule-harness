@@ -15,6 +15,7 @@ values so the existing pipeline system (P1-P5) continues to work unchanged.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -278,26 +279,36 @@ _LLM_CLASSIFY_SYSTEM = """你是一个法律文档分类专家。根据文件名
 }"""
 
 
+# 分类 LLM 调用的硬超时（秒）。上传预分类是交互路径，用户在等——
+# 超时直接回退关键词预筛结果，绝不让前端无限转圈。
+LLM_CLASSIFY_TIMEOUT_S = 12.0
+
+
 async def classify_with_llm(
     filename: str,
     text: str,
     router: Any,
     headings: list[str] | None = None,
+    timeout_s: float = LLM_CLASSIFY_TIMEOUT_S,
 ) -> dict[str, Any] | None:
     """Call LLM for precise classification. Returns None on failure.
 
     v1.2：text 应为多点采样文本（头/中/尾），并可附标题列表——
     标题对区分"手册 vs 法规 vs 合同"的区分度远高于正文前 2000 字。
+    v1.3：加 ``timeout_s`` 硬超时（默认 12s），超时返回 None 走预筛兜底。
     """
     headings_text = ""
     if headings:
         headings_text = "\n\n文档标题结构（前20个）:\n" + "\n".join(headings[:20])
     user_msg = f"文件名: {filename}{headings_text}\n\n正文采样（头部/中部/尾部）:\n{text[:3000]}"
     try:
-        result = await router.chat_json(
-            system=_LLM_CLASSIFY_SYSTEM,
-            user=user_msg,
-            temperature=0.1,
+        result = await asyncio.wait_for(
+            router.chat_json(
+                system=_LLM_CLASSIFY_SYSTEM,
+                user=user_msg,
+                temperature=0.1,
+            ),
+            timeout=timeout_s,
         )
         # Validate genre
         genre = result.get("document_genre", "")
@@ -305,6 +316,9 @@ async def classify_with_llm(
             logger.warning("LLM returned invalid genre: %s", genre)
             return None
         return result
+    except asyncio.TimeoutError:
+        logger.warning("LLM classification timed out (%.0fs) for %s", timeout_s, filename)
+        return None
     except Exception as exc:
         logger.warning("LLM classification failed for %s: %s", filename, exc)
         return None
@@ -408,7 +422,9 @@ def _map_to_source_tag(genre: str, tags: dict[str, bool]) -> str:
     if genre == "法律法规":
         return "法规"
     if genre == "监管与司法文件":
-        return "法规"
+        # 监管文件与法规同为优先级1、同走法规深抽提示词（P1 _LAW_SOURCE_TAGS），
+        # 但标签更精确，前端展示/导出元数据不再混为"法规"。
+        return "监管文件"
     if genre == "裁判文书":
         return "案例"
     if genre == "合同文本":

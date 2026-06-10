@@ -60,8 +60,14 @@ async def preview_classify(file: UploadFile = File(...)):
         cfg = load_config()
         if cfg.models.primary.api_key:
             from ..llm import create_llm_router
-            router = create_llm_router(cfg)
-            return await preview_classify_with_llm(filename, content, router)
+            llm_router = create_llm_router(cfg)
+            try:
+                return await preview_classify_with_llm(filename, content, llm_router)
+            finally:
+                try:
+                    await llm_router.aclose()
+                except Exception:
+                    logger.debug("preview router close failed", exc_info=True)
     except Exception:
         logger.debug("LLM classify unavailable, falling back to keyword-only")
     return preview_classify_bytes(filename, content)
