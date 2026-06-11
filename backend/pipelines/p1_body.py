@@ -370,6 +370,11 @@ def _coverage_policy(cfg: Config, is_law: bool = False) -> str:
     level = max(1, min(5, int(level)))
     granularity = _GRANULARITY_POLICIES[level]
     low, high = GRANULARITY_DENSITY[level]
+    # v1.4：密度区间可单项覆盖（None=跟随档位）
+    if getattr(cfg.extraction, "density_min", None) is not None:
+        low = cfg.extraction.density_min
+    if getattr(cfg.extraction, "density_max", None) is not None:
+        high = max(cfg.extraction.density_max, low)
     if is_law:
         # 法条信息密度远高于合同（一条 50 字可含定义/义务/例外/后果多条规则）。
         # 按字数设上限会主动抑制穷尽拆条，对法规只保留下限、不设上限。
@@ -392,10 +397,13 @@ def _coverage_policy(cfg: Config, is_law: bool = False) -> str:
     else:
         depth = "法规深度为 limited：保留核心成立要件、禁止性规则和高风险例外。"
 
+    # v1.4：跳过严格度可单项覆盖（lenient/strict；None=按档位：≤3 宽松，≥4 严格）
+    strictness = getattr(cfg.extraction, "skip_strictness", None)
+    use_strict = (strictness == "strict") if strictness else level > 3
     skip_policy = (
-        "- 跳过门槛：只能跳过纯背景、目录、事实经过、无可复用审查口径的内容，且必须给出 skip_reason。\n"
-        if level <= 3
-        else "- 跳过门槛（严格）：几乎不允许整块跳过；任何含规范性内容的片段都要转化为规则，跳过必须给出 skip_reason。\n"
+        "- 跳过门槛（严格）：几乎不允许整块跳过；任何含规范性内容的片段都要转化为规则，跳过必须给出 skip_reason。\n"
+        if use_strict
+        else "- 跳过门槛：只能跳过纯背景、目录、事实经过、无可复用审查口径的内容，且必须给出 skip_reason。\n"
     )
 
     return (

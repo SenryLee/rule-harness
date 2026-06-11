@@ -36,7 +36,12 @@ def _group_key(c: RuleCandidate, level: int) -> str:
 def dedupe_with_priority(
     candidates: list[RuleCandidate], cfg: Config
 ) -> list[RuleCandidate]:
-    level = getattr(cfg.extraction, "granularity_level", 3) or 3
+    # v1.4：去重粒度可单项覆盖（1=激进合并 … 5=保守保留；None=跟随颗粒度档位）
+    level = (
+        getattr(cfg.extraction, "dedupe_level", None)
+        or getattr(cfg.extraction, "granularity_level", 3)
+        or 3
+    )
     groups: dict[str, list[RuleCandidate]] = defaultdict(list)
     for c in candidates:
         groups[_group_key(c, level)].append(c)

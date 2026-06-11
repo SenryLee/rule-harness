@@ -41,6 +41,12 @@ class ExtractionConfig:
     # v1.2：颗粒度档位 1(粗)–5(极细)。旧 granularity 字符串保留兼容：
     # fine→4，balanced→3。档位同时驱动切块大小/拆分策略/跳过门槛/去重/密度提示。
     granularity_level: int = 3
+    # v1.4 细化旋钮：None = 跟随档位联动；设置后单项覆盖
+    chunk_chars: Optional[int] = None          # 目标切块字符数 600–4000
+    density_min: Optional[float] = None        # 每千字最少规则数
+    density_max: Optional[float] = None        # 每千字最多规则数（法规不设上限）
+    skip_strictness: Optional[str] = None      # lenient(宽松跳过) | strict(几乎不跳)
+    dedupe_level: Optional[int] = None         # 去重粒度 1(激进合并)–5(保守保留)
 
 
 @dataclass(frozen=True)
@@ -151,7 +157,31 @@ def _parse_extraction(raw: dict) -> ExtractionConfig:
         industry_focus_points=raw.get("industry_focus_points", ""),
         redline_keywords=tuple(raw.get("redline_keywords", [])),
         granularity_level=level,
+        chunk_chars=_opt_int(raw.get("chunk_chars"), 600, 4000),
+        density_min=_opt_float(raw.get("density_min"), 0.1, 20.0),
+        density_max=_opt_float(raw.get("density_max"), 0.1, 30.0),
+        skip_strictness=(raw.get("skip_strictness")
+                         if raw.get("skip_strictness") in ("lenient", "strict") else None),
+        dedupe_level=_opt_int(raw.get("dedupe_level"), 1, 5),
     )
+
+
+def _opt_int(value, lo: int, hi: int) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_float(value, lo: float, hi: float) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return max(lo, min(hi, float(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_priorities(raw: dict) -> PriorityConfig:
@@ -246,6 +276,11 @@ def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
         "industry_vocabulary": extraction.industry_vocabulary,
         "industry_focus_points": extraction.industry_focus_points,
         "redline_keywords": list(extraction.redline_keywords),
+        "chunk_chars": extraction.chunk_chars,
+        "density_min": extraction.density_min,
+        "density_max": extraction.density_max,
+        "skip_strictness": extraction.skip_strictness,
+        "dedupe_level": extraction.dedupe_level,
     }
 
 
