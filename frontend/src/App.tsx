@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import MainLayout from './layouts/MainLayout';
 import Dashboard from './pages/Dashboard';
-import RuleLibrary from './pages/RuleLibrary';
+import Archive from './pages/Archive';
 import TaskList from './pages/TaskList';
 import TaskNew from './pages/TaskNew';
 import TaskDetail from './pages/TaskDetail';
@@ -16,7 +16,7 @@ export default function App() {
         <Routes>
           <Route element={<MainLayout />}>
             <Route index element={<Dashboard />} />
-            <Route path="rules" element={<RuleLibrary />} />
+            <Route path="rules" element={<Archive />} />
             <Route path="tasks" element={<TaskList />} />
             <Route path="tasks/new" element={<TaskNew />} />
             <Route path="tasks/:batchId" element={<TaskDetail />} />

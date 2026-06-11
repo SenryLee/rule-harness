@@ -89,6 +89,10 @@ export interface BatchStats {
 
 export interface Batch {
   batch_id: string;
+  /** v1.4 任务名（自动命名或用户重命名） */
+  name?: string;
+  /** v1.4 归档文件夹 ID，空串=未归档 */
+  folder_id?: string;
   started_at: string;
   finished_at: string | null;
   status: string;
@@ -357,6 +361,12 @@ export interface ExtractionOverrides {
   consistency_sampling?: boolean;
   industry_vocabulary?: string;
   industry_focus_points?: string;
+  /** v1.4 细化旋钮：不传=跟随颗粒度档位联动 */
+  chunk_chars?: number;
+  density_min?: number;
+  density_max?: number;
+  skip_strictness?: 'lenient' | 'strict';
+  dedupe_level?: number;
 }
 
 export interface CreateBatchMeta {
@@ -482,20 +492,39 @@ export interface CreateBatchResponse {
   status: string;
 }
 
-export function createBatch(files: File[], meta: CreateBatchMeta[]): Promise<CreateBatchResponse> {
+export function createBatch(
+  files: File[],
+  meta: CreateBatchMeta[],
+  options?: { name?: string; folderId?: string },
+): Promise<CreateBatchResponse> {
   const formData = new FormData();
   files.forEach((file) => {
     formData.append('files', file);
   });
   formData.append('meta', JSON.stringify(meta));
+  if (options?.name) formData.append('name', options.name);
+  if (options?.folderId) formData.append('folder_id', options.folderId);
   return request<CreateBatchResponse>('/api/batches', {
     method: 'POST',
     body: formData,
   });
 }
 
-export function fetchBatches(): Promise<Batch[]> {
-  return request<Batch[]>('/api/batches');
+export function fetchBatches(folderId?: string): Promise<Batch[]> {
+  const qs = folderId !== undefined ? `?folder_id=${encodeURIComponent(folderId)}` : '';
+  return request<Batch[]>(`/api/batches${qs}`);
+}
+
+/** v1.4 重命名 / 移动归档 */
+export function patchBatch(
+  id: string,
+  payload: { name?: string; folder_id?: string },
+): Promise<{ batch_id: string }> {
+  return request(`/api/batches/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 export function fetchBatch(id: string): Promise<Batch> {
@@ -583,21 +612,157 @@ export function fetchBatchRules(id: string, filters: BatchRuleFilters = {}): Pro
   return request<RuleListResponse>(`/api/batches/${encodeURIComponent(id)}/rules${qs}`);
 }
 
-export type ExportKind =
-  | 'main-csv'
-  | 'metadata-csv'
-  | 'conflict-report'
-  | 'change-set'
-  | 'placeholders-csv'
-  | 'discarded-csv'
-  | 'negotiation-csv'
-  | 'out-of-scope-csv'
-  | 'template-strategy'
-  | 'summary';
+export type ExportKind = 'main-csv' | 'located-csv';
 
 export function downloadExport(id: string, kind: ExportKind): void {
   const url = `/api/batches/${encodeURIComponent(id)}/exports/${kind}`;
   window.open(url, '_blank');
+}
+
+// ── v1.4 自定义导出 ─────────────────────────────────────────────────
+
+export interface ExportField {
+  key: string;
+  group: string;
+  label: string;
+}
+
+export function fetchExportFields(): Promise<ExportField[]> {
+  return request<ExportField[]>('/api/export-fields');
+}
+
+export interface CustomExportFilters {
+  output_target?: string;
+  risk_level?: string;
+  source_file?: string;
+}
+
+/** POST 自定义导出并触发浏览器下载 */
+export async function downloadCustomExport(
+  batchId: string,
+  columns: string[],
+  filters: CustomExportFilters = {},
+): Promise<void> {
+  const response = await fetch(
+    `/api/batches/${encodeURIComponent(batchId)}/exports/custom`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columns, filters }),
+    },
+  );
+  if (!response.ok) {
+    let message = `导出失败 (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body.detail) message = String(body.detail);
+    } catch {
+      // keep default
+    }
+    throw new ApiError(message, response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `自定义导出_${batchId}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ── v1.4 项目归档文件夹与合并 ───────────────────────────────────────
+
+export interface Folder {
+  folder_id: string;
+  name: string;
+  created_at?: string;
+  batch_count?: number;
+}
+
+export interface MergeStats {
+  batches: number;
+  total_in: number;
+  fingerprint_dups_removed: number;
+  struct_dups_removed: number;
+  total_out: number;
+  batch_names?: string[];
+}
+
+export interface FolderMerge {
+  merge_id: string;
+  folder_id: string;
+  name: string;
+  batch_ids: string[];
+  stats: MergeStats;
+  created_at?: string;
+  rules?: RuleItem[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+}
+
+export function fetchFolders(): Promise<Folder[]> {
+  return request<Folder[]>('/api/folders');
+}
+
+export function createFolder(name: string): Promise<Folder> {
+  return request<Folder>('/api/folders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function renameFolder(folderId: string, name: string): Promise<Folder> {
+  return request<Folder>(`/api/folders/${encodeURIComponent(folderId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteFolder(folderId: string): Promise<void> {
+  return request<void>(`/api/folders/${encodeURIComponent(folderId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function mergeFolderBatches(
+  folderId: string,
+  batchIds: string[],
+  name?: string,
+): Promise<{ merge_id: string; name: string; stats: MergeStats }> {
+  return request(`/api/folders/${encodeURIComponent(folderId)}/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ batch_ids: batchIds, name }),
+  });
+}
+
+export function fetchFolderMerges(folderId: string): Promise<FolderMerge[]> {
+  return request<FolderMerge[]>(`/api/folders/${encodeURIComponent(folderId)}/merges`);
+}
+
+export function fetchMerge(
+  mergeId: string,
+  page = 1,
+  pageSize = 50,
+): Promise<FolderMerge> {
+  return request<FolderMerge>(
+    `/api/merges/${encodeURIComponent(mergeId)}?page=${page}&page_size=${pageSize}`,
+  );
+}
+
+export function deleteMerge(mergeId: string): Promise<void> {
+  return request<void>(`/api/merges/${encodeURIComponent(mergeId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function downloadMergeExport(mergeId: string, kind: 'template' | 'located'): void {
+  window.open(`/api/merges/${encodeURIComponent(mergeId)}/export?kind=${kind}`, '_blank');
 }
 
 export function applyMerge(id: string): Promise<void> {

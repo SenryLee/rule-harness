@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -17,6 +17,7 @@ import {
 import {
   createBatch,
   deleteTaskPreset,
+  fetchFolders,
   fetchProfile,
   fetchProfiles,
   fetchTaskPresets,
@@ -25,6 +26,8 @@ import {
 } from '../api';
 import type {
   CreateBatchMeta,
+  ExtractionOverrides,
+  Folder,
   PreviewClassifyResponse,
   Profile,
   TaskPreset,
@@ -99,6 +102,12 @@ interface TaskConfig {
   industry_preset: string | null;
   industry_vocabulary: string;
   industry_focus_points: string;
+  /** v1.4 细化旋钮：空串/0 = 跟随颗粒度档位自动 */
+  chunk_chars: number;
+  density_min: string;
+  density_max: string;
+  skip_strictness: '' | 'lenient' | 'strict';
+  dedupe_level: number;
 }
 
 const DEFAULT_TASK_CONFIG: TaskConfig = {
@@ -111,10 +120,35 @@ const DEFAULT_TASK_CONFIG: TaskConfig = {
   industry_preset: null,
   industry_vocabulary: '',
   industry_focus_points: '',
+  chunk_chars: 0,
+  density_min: '',
+  density_max: '',
+  skip_strictness: '',
+  dedupe_level: 0,
 };
+
+const CHUNK_OPTIONS = [
+  { value: 0, label: '自动（随颗粒度）' },
+  { value: 1200, label: '1200 字 · 精细' },
+  { value: 1500, label: '1500 字' },
+  { value: 2000, label: '2000 字 · 均衡' },
+  { value: 2500, label: '2500 字' },
+  { value: 3000, label: '3000 字 · 粗' },
+];
+
+const DEDUPE_OPTIONS = [
+  { value: 0, label: '自动（随颗粒度）' },
+  { value: 1, label: '1 · 激进合并（同主题同主体并一条）' },
+  { value: 3, label: '3 · 标准（按审查口径合并）' },
+  { value: 4, label: '4 · 保守（口径不同即保留）' },
+  { value: 5, label: '5 · 最保守（阈值不同也保留）' },
+];
 
 export default function TaskNew() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const folderId = searchParams.get('folder') || '';
+  const [folderName, setFolderName] = useState('');
   const [step, setStep] = useState(0);
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [taskConfig, setTaskConfig] = useState<TaskConfig>(DEFAULT_TASK_CONFIG);
@@ -128,7 +162,15 @@ export default function TaskNew() {
   useEffect(() => {
     fetchProfiles().then(setProfiles).catch(() => {});
     fetchTaskPresets().then(setPresets).catch(() => {});
-  }, []);
+    if (folderId) {
+      fetchFolders()
+        .then((folders: Folder[]) => {
+          const found = folders.find((f) => f.folder_id === folderId);
+          if (found) setFolderName(found.name);
+        })
+        .catch(() => {});
+    }
+  }, [folderId]);
 
   const classifyingCount = files.filter((f) => f.classifying).length;
   const allClassified = files.length > 0 && classifyingCount === 0;
@@ -279,17 +321,26 @@ export default function TaskNew() {
           meta.granularity_level = taskConfig.granularity_level;
           meta.task_mode = taskConfig.task_mode;
           meta.scope_description = taskConfig.scope_description || undefined;
-          meta.extraction_overrides = {
+          const overrides: ExtractionOverrides = {
             granularity_level: taskConfig.granularity_level,
             regulation_depth: taskConfig.regulation_depth,
             consistency_sampling: taskConfig.consistency_sampling,
             industry_vocabulary: taskConfig.industry_vocabulary || undefined,
             industry_focus_points: taskConfig.industry_focus_points || undefined,
           };
+          // v1.4 细化旋钮：仅显式设置时传递
+          if (taskConfig.chunk_chars > 0) overrides.chunk_chars = taskConfig.chunk_chars;
+          if (taskConfig.density_min.trim()) overrides.density_min = Number(taskConfig.density_min);
+          if (taskConfig.density_max.trim()) overrides.density_max = Number(taskConfig.density_max);
+          if (taskConfig.skip_strictness) overrides.skip_strictness = taskConfig.skip_strictness;
+          if (taskConfig.dedupe_level > 0) overrides.dedupe_level = taskConfig.dedupe_level;
+          meta.extraction_overrides = overrides;
         }
         return meta;
       });
-      const result = await createBatch(files.map((f) => f.file), metas);
+      const result = await createBatch(files.map((f) => f.file), metas, {
+        folderId: folderId || undefined,
+      });
       navigate(`/tasks/${result.batch_id}`);
     } catch (error: unknown) {
       setStep(1);
@@ -302,7 +353,12 @@ export default function TaskNew() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">新建任务</h1>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">上传法律文件，启动规则抽取</p>
+        <p className="mt-1 flex items-center gap-2 text-sm text-[var(--text-muted)]">
+          上传法律文件，启动规则抽取
+          {folderId && (
+            <span className="badge-info">完成后自动归档到「{folderName || folderId}」</span>
+          )}
+        </p>
       </div>
 
       {/* Stepper */}
@@ -663,6 +719,87 @@ export default function TaskNew() {
                     />
                     一致性采样（双跑校验，更准但更慢）
                   </label>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                    切块大小（每次喂给模型的原文长度，越小越细）
+                  </label>
+                  <select
+                    className="input-field"
+                    value={taskConfig.chunk_chars}
+                    onChange={(e) =>
+                      setTaskConfig((prev) => ({ ...prev, chunk_chars: Number(e.target.value) }))
+                    }
+                  >
+                    {CHUNK_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                    跳过严格度（模型判定"无规则可抽"的门槛）
+                  </label>
+                  <select
+                    className="input-field"
+                    value={taskConfig.skip_strictness}
+                    onChange={(e) =>
+                      setTaskConfig((prev) => ({
+                        ...prev,
+                        skip_strictness: e.target.value as TaskConfig['skip_strictness'],
+                      }))
+                    }
+                  >
+                    <option value="">自动（随颗粒度）</option>
+                    <option value="lenient">宽松 · 背景性内容允许跳过</option>
+                    <option value="strict">严格 · 几乎不允许跳过段落</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                    期望规则密度（条/千字，留空=自动）
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="input-field"
+                      type="number"
+                      min={0.1}
+                      step={0.5}
+                      placeholder="下限"
+                      value={taskConfig.density_min}
+                      onChange={(e) =>
+                        setTaskConfig((prev) => ({ ...prev, density_min: e.target.value }))
+                      }
+                    />
+                    <span className="text-xs text-[var(--text-muted)]">–</span>
+                    <input
+                      className="input-field"
+                      type="number"
+                      min={0.1}
+                      step={0.5}
+                      placeholder="上限"
+                      value={taskConfig.density_max}
+                      onChange={(e) =>
+                        setTaskConfig((prev) => ({ ...prev, density_max: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                    去重强度（相似规则的合并程度）
+                  </label>
+                  <select
+                    className="input-field"
+                    value={taskConfig.dedupe_level}
+                    onChange={(e) =>
+                      setTaskConfig((prev) => ({ ...prev, dedupe_level: Number(e.target.value) }))
+                    }
+                  >
+                    {DEDUPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="md:col-span-2">
                   <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">

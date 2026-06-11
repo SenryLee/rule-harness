@@ -1,17 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Download, CheckCircle2, Sparkles, X, Loader2, CircleStop } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleStop,
+  Download,
+  Loader2,
+  Pencil,
+  SlidersHorizontal,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import {
   fetchBatch,
   fetchBatchRules,
+  fetchExportFields,
   subscribeBatchProgress,
   applyMerge,
   cancelBatch,
+  downloadCustomExport,
   downloadExport,
   generateSkill,
   downloadSkillZip,
+  patchBatch,
 } from '../api';
-import type { Batch, RuleItem, BatchProgress, ExportKind, SkillGenerateResponse } from '../api';
+import type {
+  Batch,
+  RuleItem,
+  BatchProgress,
+  ExportField,
+  SkillGenerateResponse,
+} from '../api';
 
 function statusLabel(status: string): string {
   const map: Record<string, string> = {
@@ -74,14 +96,7 @@ function riskBadge(level: string) {
   return 'badge-success';
 }
 
-const EXPORTS: { key: ExportKind; label: string }[] = [
-  { key: 'main-csv', label: '主 CSV' },
-  { key: 'metadata-csv', label: '元数据' },
-  { key: 'conflict-report', label: '冲突报告' },
-  { key: 'placeholders-csv', label: '占位规则' },
-  { key: 'negotiation-csv', label: '谈判阶梯' },
-  { key: 'template-strategy', label: '模板策略' },
-];
+const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
 export default function TaskDetail() {
   const { batchId } = useParams<{ batchId: string }>();
@@ -91,27 +106,39 @@ export default function TaskDetail() {
   const [total, setTotal] = useState(0);
   const [selectedRule, setSelectedRule] = useState<RuleItem | null>(null);
   const [skillOpen, setSkillOpen] = useState(false);
+  const [customExportOpen, setCustomExportOpen] = useState(false);
+
+  // v1.4 分页
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(50);
+
+  // v1.4 重命名
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
 
   // 进度条单调递增：抽取期 SSE 偶发抖动时不回退
   const [displayPct, setDisplayPct] = useState(0);
   const maxPctRef = useRef(0);
+
+  // 规则分页加载
+  useEffect(() => {
+    if (!batchId) return;
+    fetchBatchRules(batchId, { page, page_size: pageSize })
+      .then((res) => {
+        setRules(res.rules);
+        setTotal(res.total);
+      })
+      .catch(() => {});
+  }, [batchId, page, pageSize]);
 
   useEffect(() => {
     if (!batchId) return;
 
     maxPctRef.current = 0;
     setDisplayPct(0);
-
-    const loadRules = () =>
-      fetchBatchRules(batchId, { page_size: 1000 })
-        .then((res) => {
-          setRules(res.rules);
-          setTotal(res.total);
-        })
-        .catch(() => {});
+    setPage(1);
 
     fetchBatch(batchId).then(setBatch).catch(() => {});
-    loadRules();
 
     const unsub = subscribeBatchProgress(
       batchId,
@@ -125,12 +152,33 @@ export default function TaskDetail() {
         maxPctRef.current = 100;
         setDisplayPct(100);
         fetchBatch(batchId).then(setBatch).catch(() => {});
-        loadRules();
+        fetchBatchRules(batchId, { page: 1, page_size: pageSize })
+          .then((res) => {
+            setPage(1);
+            setRules(res.rules);
+            setTotal(res.total);
+          })
+          .catch(() => {});
       },
     );
 
     return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
+
+  const commitRename = async () => {
+    if (!batchId) return;
+    const name = nameDraft.trim();
+    if (name && name !== batch?.name) {
+      try {
+        await patchBatch(batchId, { name });
+        setBatch((prev) => (prev ? { ...prev, name } : prev));
+      } catch {
+        // ignore
+      }
+    }
+    setEditingName(false);
+  };
 
   const [stopping, setStopping] = useState(false);
   const isStopping =
@@ -179,11 +227,43 @@ export default function TaskDetail() {
         <Link to="/tasks" className="btn-ghost">
           <ArrowLeft size={16} />
         </Link>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight font-mono">{batchId}</h1>
+        <div className="min-w-0 flex-1">
+          {editingName ? (
+            <span className="flex items-center gap-2">
+              <input
+                autoFocus
+                className="input-field max-w-[420px] py-1.5 text-lg font-semibold"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename();
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+              />
+              <button onClick={commitRename} className="text-[var(--color-green)]"><Check size={18} /></button>
+              <button onClick={() => setEditingName(false)} className="text-[var(--text-muted)]"><X size={18} /></button>
+            </span>
+          ) : (
+            <span className="group flex items-center gap-2">
+              <h1 className="truncate text-2xl font-semibold tracking-tight">
+                {batch?.name || batchId}
+              </h1>
+              <button
+                onClick={() => {
+                  setNameDraft(batch?.name || batchId || '');
+                  setEditingName(true);
+                }}
+                className="text-[var(--text-muted)] opacity-0 transition-opacity hover:text-[var(--color-accent)] group-hover:opacity-100"
+                title="重命名任务"
+              >
+                <Pencil size={15} />
+              </button>
+            </span>
+          )}
           <p className="mt-0.5 text-sm text-[var(--text-muted)]">
             {batch ? statusLabel(batch.status) : '加载中...'}
             {batch?.started_at && ` · ${batch.started_at.slice(0, 16).replace('T', ' ')}`}
+            <span className="ml-2 font-mono text-xs">{batchId}</span>
           </p>
         </div>
         {isRunning && (
@@ -243,18 +323,27 @@ export default function TaskDetail() {
         </div>
       )}
 
-      {/* Export buttons */}
+      {/* Export buttons（v1.4：两个预制 + 自定义勾选） */}
       {isDone && (
         <div className="flex items-center gap-2 flex-wrap">
-          {EXPORTS.map(({ key, label }) => (
-            <button
-              key={key}
-              className="btn-secondary text-xs"
-              onClick={() => downloadExport(batchId, key)}
-            >
-              <Download size={14} /> {label}
-            </button>
-          ))}
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => downloadExport(batchId, 'main-csv')}
+          >
+            <Download size={14} /> 规则模板 CSV
+          </button>
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => downloadExport(batchId, 'located-csv')}
+          >
+            <Download size={14} /> 规则导出（含原文定位）
+          </button>
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => setCustomExportOpen(true)}
+          >
+            <SlidersHorizontal size={14} /> 自定义导出…
+          </button>
         </div>
       )}
 
@@ -309,11 +398,216 @@ export default function TaskDetail() {
               )}
             </tbody>
           </table>
+
+          {/* v1.4 分页器 */}
+          {total > 0 && (
+            <div className="flex items-center justify-between border-t border-[var(--border-light)] px-5 py-3 text-xs">
+              <span className="text-[var(--text-muted)]">
+                共 {total} 条 · 第 {page}/{Math.max(1, Math.ceil(total / pageSize))} 页
+              </span>
+              <div className="flex items-center gap-2">
+                <select
+                  className="input-field w-auto py-1 text-xs"
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>{size} 条/页</option>
+                  ))}
+                </select>
+                <button
+                  className="btn-ghost px-2 py-1"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <button
+                  className="btn-ghost px-2 py-1"
+                  disabled={page >= Math.ceil(total / pageSize)}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {selectedRule && <DetailDrawer rule={selectedRule} onClose={() => setSelectedRule(null)} />}
       {skillOpen && <SkillModal batchId={batchId} onClose={() => setSkillOpen(false)} />}
+      {customExportOpen && (
+        <CustomExportModal batchId={batchId} onClose={() => setCustomExportOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── v1.4 自定义导出弹窗 ────────────────────────────────────────────────
+
+const BASE_COLUMNS = ['rule_id', 'enabled', 'risk_level', 'keywords', 'check_item', 'requirement', 'notes'];
+
+function CustomExportModal({ batchId, onClose }: { batchId: string; onClose: () => void }) {
+  const [fields, setFields] = useState<ExportField[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set(BASE_COLUMNS));
+  const [outputTarget, setOutputTarget] = useState('main');
+  const [riskLevel, setRiskLevel] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchExportFields().then(setFields).catch(() => {});
+  }, []);
+
+  const groups = fields.reduce<Record<string, ExportField[]>>((acc, f) => {
+    (acc[f.group] = acc[f.group] || []).push(f);
+    return acc;
+  }, {});
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleGroup = (groupFields: ExportField[]) => {
+    const allOn = groupFields.every((f) => selected.has(f.key));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      groupFields.forEach((f) => {
+        if (allOn) next.delete(f.key);
+        else next.add(f.key);
+      });
+      return next;
+    });
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      // 按注册表顺序导出列
+      const columns = fields.filter((f) => selected.has(f.key)).map((f) => f.key);
+      await downloadCustomExport(batchId, columns, {
+        output_target: outputTarget,
+        risk_level: riskLevel || undefined,
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center animate-page-in">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="cmd-palette relative max-h-[86vh] w-[640px] max-w-[94vw] overflow-y-auto">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border-light)] bg-white/90 px-6 py-4 backdrop-blur-sm">
+          <div>
+            <div className="text-base font-semibold">自定义导出</div>
+            <div className="text-xs text-[var(--text-muted)]">
+              已选 {selected.size} 个字段 · 按分组勾选自由组合
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="btn-ghost p-1">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="space-y-5 px-6 py-5">
+          {/* 过滤器 */}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs text-[var(--text-muted)]">
+              规则范围
+              <select
+                className="input-field mt-1 w-auto py-1.5 text-xs"
+                value={outputTarget}
+                onChange={(e) => setOutputTarget(e.target.value)}
+              >
+                <option value="main">实质规则（默认）</option>
+                <option value="all">全部（含占位/弃用）</option>
+                <option value="placeholder">仅占位规则</option>
+                <option value="discarded">仅弃用规则</option>
+                <option value="negotiation">仅谈判阶梯</option>
+                <option value="out_of_scope">仅范围外</option>
+              </select>
+            </label>
+            <label className="text-xs text-[var(--text-muted)]">
+              风险等级
+              <select
+                className="input-field mt-1 w-auto py-1.5 text-xs"
+                value={riskLevel}
+                onChange={(e) => setRiskLevel(e.target.value)}
+              >
+                <option value="">全部</option>
+                <option value="高">仅高</option>
+                <option value="中">仅中</option>
+                <option value="低">仅低</option>
+              </select>
+            </label>
+          </div>
+
+          {/* 字段分组 */}
+          {Object.entries(groups).map(([group, groupFields]) => (
+            <div key={group}>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold text-[var(--text-secondary)]">{group}</span>
+                <button
+                  className="text-[11px] text-[var(--color-accent)] hover:underline"
+                  onClick={() => toggleGroup(groupFields)}
+                >
+                  {groupFields.every((f) => selected.has(f.key)) ? '取消全选' : '全选'}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                {groupFields.map((field) => (
+                  <label
+                    key={field.key}
+                    className="inline-flex cursor-pointer select-none items-center gap-1.5 text-sm text-[var(--text-secondary)]"
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-[var(--color-accent)]"
+                      checked={selected.has(field.key)}
+                      onChange={() => toggle(field.key)}
+                    />
+                    {field.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {error && (
+            <div className="rounded-lg border border-[var(--border-light)] bg-[var(--color-red-soft)] p-3 text-sm text-[var(--color-red)]">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 flex justify-end border-t border-[var(--border-light)] bg-white/90 px-6 py-4 backdrop-blur-sm">
+          <button
+            className="btn-primary"
+            disabled={exporting || selected.size === 0}
+            onClick={handleExport}
+          >
+            {exporting ? (
+              <><Loader2 size={16} className="animate-spin" /> 导出中…</>
+            ) : (
+              <><Download size={16} /> 导出 CSV</>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
-  BookOpen,
+  FolderOpen,
   Zap,
   Link2,
   Settings,
@@ -9,7 +9,7 @@ import {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/rules', icon: BookOpen, label: '规则库' },
+  { to: '/rules', icon: FolderOpen, label: '项目归档' },
   { to: '/tasks', icon: Zap, label: '任务中心' },
   { to: '/integrations', icon: Link2, label: 'Dify 集成' },
   { to: '/settings', icon: Settings, label: '系统设置' },
