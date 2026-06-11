@@ -120,6 +120,11 @@ class BatchRecord:
     status: str = ""
     config_snapshot: str = ""
     stats: str = ""
+    # v1.4 任务持久化：任务名 / 归档文件夹 / 文件清单 / 结果摘要
+    name: str = ""
+    folder_id: str = ""
+    file_metas: str = "[]"
+    summary_json: str = "{}"
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,54 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_merge_rule ON merge_history(rule_id)"
+        )
+
+        # ── v1.4 任务持久化 + 项目归档 ────────────────────────────
+        # 旧库迁移：batches 表补列（已存在则忽略）
+        for ddl in (
+            "ALTER TABLE batches ADD COLUMN name TEXT DEFAULT ''",
+            "ALTER TABLE batches ADD COLUMN folder_id TEXT DEFAULT ''",
+            "ALTER TABLE batches ADD COLUMN file_metas TEXT DEFAULT '[]'",
+            "ALTER TABLE batches ADD COLUMN summary_json TEXT DEFAULT '{}'",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # duplicate column
+
+        # 批次结果载荷：API-ready 规则/决策 JSON，重启后恢复任务详情
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS batch_payloads (
+                batch_id  TEXT PRIMARY KEY,
+                rules     TEXT NOT NULL DEFAULT '[]',
+                decisions TEXT NOT NULL DEFAULT '[]',
+                saved_at  TIMESTAMP
+            )
+        """)
+
+        # 项目归档文件夹
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS folders (
+                folder_id  TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                created_at TIMESTAMP
+            )
+        """)
+
+        # 文件夹内多任务手动合并去重的结果存档
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS folder_merges (
+                merge_id   TEXT PRIMARY KEY,
+                folder_id  TEXT NOT NULL,
+                name       TEXT NOT NULL DEFAULT '',
+                batch_ids  TEXT NOT NULL DEFAULT '[]',
+                rules      TEXT NOT NULL DEFAULT '[]',
+                stats      TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_folder_merges_folder ON folder_merges(folder_id)"
         )
 
 
@@ -549,24 +602,44 @@ def list_batches(limit: int = 100) -> list[BatchRecord]:
 
 
 def insert_batch(batch: dict) -> BatchRecord:
+    """v1.4 改为 upsert：路由层在创建时已写入批次行（含 name/file_metas），
+    orchestrator 持久化阶段再调本函数补 config_snapshot，不应报主键冲突。"""
+    return upsert_batch_fields(batch["batch_id"], {
+        "started_at": batch.get("started_at"),
+        "finished_at": batch.get("finished_at"),
+        "status": batch.get("status"),
+        "config_snapshot": batch.get("config_snapshot"),
+        "stats": batch.get("stats"),
+    })
+
+
+_BATCH_FIELDS = (
+    "started_at", "finished_at", "status", "config_snapshot", "stats",
+    "name", "folder_id", "file_metas", "summary_json",
+)
+
+
+def upsert_batch_fields(batch_id: str, fields: dict) -> BatchRecord:
+    """只更新提供且非 None 的字段；行不存在则先插入。"""
+    updates = {k: v for k, v in fields.items() if k in _BATCH_FIELDS and v is not None}
     with transaction() as conn:
-        conn.execute(
-            """
-            INSERT INTO batches (batch_id, started_at, finished_at, status,
-                                 config_snapshot, stats)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                batch["batch_id"],
-                batch.get("started_at", _now_iso()),
-                batch.get("finished_at", ""),
-                batch.get("status", "running"),
-                batch.get("config_snapshot", "{}"),
-                batch.get("stats", "{}"),
-            ),
-        )
+        existing = conn.execute(
+            "SELECT batch_id FROM batches WHERE batch_id = ?", (batch_id,)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO batches (batch_id, started_at, status) VALUES (?, ?, ?)",
+                (batch_id, updates.pop("started_at", None) or _now_iso(),
+                 updates.pop("status", None) or "running"),
+            )
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE batches SET {set_clause} WHERE batch_id = ?",
+                (*updates.values(), batch_id),
+            )
         row = conn.execute(
-            "SELECT * FROM batches WHERE batch_id = ?", (batch["batch_id"],)
+            "SELECT * FROM batches WHERE batch_id = ?", (batch_id,)
         ).fetchone()
     return _row_to_dataclass(row, BatchRecord)
 
@@ -595,6 +668,182 @@ def update_batch(batch_id: str, updates: dict) -> BatchRecord:
             "SELECT * FROM batches WHERE batch_id = ?", (batch_id,)
         ).fetchone()
     return _row_to_dataclass(row, BatchRecord)
+
+
+def delete_batch_record(batch_id: str) -> None:
+    with transaction() as conn:
+        conn.execute("DELETE FROM batches WHERE batch_id = ?", (batch_id,))
+        conn.execute("DELETE FROM batch_payloads WHERE batch_id = ?", (batch_id,))
+
+
+# ── v1.4 批次结果载荷（规则/决策 JSON，重启恢复用） ─────────────────
+
+def save_batch_payload(batch_id: str, rules: list[dict], decisions: list[dict]) -> None:
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO batch_payloads (batch_id, rules, decisions, saved_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(batch_id) DO UPDATE SET
+                rules = excluded.rules,
+                decisions = excluded.decisions,
+                saved_at = excluded.saved_at
+            """,
+            (
+                batch_id,
+                json.dumps(rules, ensure_ascii=False),
+                json.dumps(decisions, ensure_ascii=False),
+                _now_iso(),
+            ),
+        )
+
+
+def load_batch_payload(batch_id: str) -> tuple[list[dict], list[dict]] | None:
+    with _lock:
+        conn = _get_conn()
+        try:
+            row = conn.execute(
+                "SELECT rules, decisions FROM batch_payloads WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return None
+    try:
+        return (
+            json.loads(row["rules"]) or [],
+            json.loads(row["decisions"]) or [],
+        )
+    except json.JSONDecodeError:
+        return None
+
+
+# ── v1.4 项目归档文件夹 ──────────────────────────────────────────────
+
+def insert_folder(folder_id: str, name: str) -> dict:
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO folders (folder_id, name, created_at) VALUES (?, ?, ?)",
+            (folder_id, name, _now_iso()),
+        )
+    return {"folder_id": folder_id, "name": name}
+
+
+def rename_folder(folder_id: str, name: str) -> None:
+    with transaction() as conn:
+        conn.execute("UPDATE folders SET name = ? WHERE folder_id = ?", (name, folder_id))
+
+
+def delete_folder(folder_id: str) -> None:
+    """删除文件夹：其下任务移回未归档（folder_id 置空），合并存档一并删除。"""
+    with transaction() as conn:
+        conn.execute("UPDATE batches SET folder_id = '' WHERE folder_id = ?", (folder_id,))
+        conn.execute("DELETE FROM folder_merges WHERE folder_id = ?", (folder_id,))
+        conn.execute("DELETE FROM folders WHERE folder_id = ?", (folder_id,))
+
+
+def list_folders() -> list[dict]:
+    with _lock:
+        conn = _get_conn()
+        try:
+            rows = conn.execute("""
+                SELECT f.folder_id, f.name, f.created_at,
+                       COUNT(b.batch_id) AS batch_count
+                FROM folders f
+                LEFT JOIN batches b ON b.folder_id = f.folder_id
+                GROUP BY f.folder_id
+                ORDER BY f.created_at DESC
+            """).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+def get_folder(folder_id: str) -> dict | None:
+    with _lock:
+        conn = _get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM folders WHERE folder_id = ?", (folder_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+# ── v1.4 文件夹内多任务合并存档 ──────────────────────────────────────
+
+def insert_folder_merge(merge: dict) -> None:
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO folder_merges (merge_id, folder_id, name, batch_ids,
+                                       rules, stats, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                merge["merge_id"],
+                merge["folder_id"],
+                merge.get("name", ""),
+                json.dumps(merge.get("batch_ids", []), ensure_ascii=False),
+                json.dumps(merge.get("rules", []), ensure_ascii=False),
+                json.dumps(merge.get("stats", {}), ensure_ascii=False),
+                _now_iso(),
+            ),
+        )
+
+
+def list_folder_merges(folder_id: str) -> list[dict]:
+    """列出合并存档（不含 rules 大字段）。"""
+    with _lock:
+        conn = _get_conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT merge_id, folder_id, name, batch_ids, stats, created_at
+                FROM folder_merges WHERE folder_id = ? ORDER BY created_at DESC
+                """,
+                (folder_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+    out = []
+    for r in rows:
+        item = dict(r)
+        try:
+            item["batch_ids"] = json.loads(item["batch_ids"]) or []
+            item["stats"] = json.loads(item["stats"]) or {}
+        except json.JSONDecodeError:
+            item["batch_ids"], item["stats"] = [], {}
+        out.append(item)
+    return out
+
+
+def get_folder_merge(merge_id: str) -> dict | None:
+    with _lock:
+        conn = _get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM folder_merges WHERE merge_id = ?", (merge_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return None
+    item = dict(row)
+    try:
+        item["batch_ids"] = json.loads(item["batch_ids"]) or []
+        item["rules"] = json.loads(item["rules"]) or []
+        item["stats"] = json.loads(item["stats"]) or {}
+    except json.JSONDecodeError:
+        return None
+    return item
+
+
+def delete_folder_merge(merge_id: str) -> None:
+    with transaction() as conn:
+        conn.execute("DELETE FROM folder_merges WHERE merge_id = ?", (merge_id,))
 
 
 def insert_source_document(doc: dict) -> SourceDocRecord:

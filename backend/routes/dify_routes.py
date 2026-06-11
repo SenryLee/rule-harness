@@ -34,10 +34,28 @@ from ..orchestrator import (
     run_batch,
 )
 from .. import state
+from .. import storage
+from ..batch_persist import persist_finish
+from .batch_routes import auto_batch_name
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dify", tags=["dify"])
+
+
+def _persist_dify_create(batch_id: str) -> None:
+    batch = state.batches.get(batch_id)
+    if not batch:
+        return
+    try:
+        storage.upsert_batch_fields(batch_id, {
+            "started_at": batch.get("started_at"),
+            "status": batch.get("status", "running"),
+            "name": batch.get("name"),
+            "file_metas": json.dumps(batch.get("file_metas") or [], ensure_ascii=False),
+        })
+    except Exception:
+        logger.exception("persist dify batch create failed for %s", batch_id)
 
 _UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 
@@ -158,6 +176,8 @@ async def dify_upload(
     now = _now_iso()
     state.batches[batch_id] = {
         "batch_id": batch_id,
+        "name": f"[Dify] {auto_batch_name(saved_metas)}",
+        "folder_id": "",
         "status": "running",
         "started_at": now,
         "finished_at": None,
@@ -167,6 +187,7 @@ async def dify_upload(
         "source": "dify",
     }
     state.batch_progress[batch_id] = BatchProgress(total_files=len(saved_metas))
+    _persist_dify_create(batch_id)
 
     background_tasks.add_task(_run_dify_batch, batch_id, saved_metas)
 
@@ -201,6 +222,7 @@ async def _run_dify_batch(batch_id: str, file_metas: list[dict]) -> None:
         progress.status = "partial"
         state.batches[batch_id]["status"] = "partial"
         state.batches[batch_id]["finished_at"] = _now_iso()
+    persist_finish(batch_id)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +425,8 @@ async def dify_extract(
     progress = BatchProgress(total_files=len(file_metas))
     state.batches[batch_id] = {
         "batch_id": batch_id,
+        "name": f"[Dify] {auto_batch_name(file_metas)}",
+        "folder_id": "",
         "status": "running",
         "started_at": now,
         "finished_at": None,
@@ -412,6 +436,7 @@ async def dify_extract(
         "source": "dify",
     }
     state.batch_progress[batch_id] = progress
+    _persist_dify_create(batch_id)
 
     try:
         cfg = load_config()
@@ -430,6 +455,7 @@ async def dify_extract(
         progress.status = "partial"
         state.batches[batch_id]["status"] = "partial"
         state.batches[batch_id]["finished_at"] = _now_iso()
+        persist_finish(batch_id)
         raise HTTPException(status_code=500, detail=f"抽取失败: {exc}") from exc
 
     rules = [candidate_to_api_dict(r) for r in result.rules]
@@ -438,6 +464,7 @@ async def dify_extract(
     state.batch_exports[batch_id] = result.exports
     state.batches[batch_id]["status"] = progress.status
     state.batches[batch_id]["finished_at"] = _now_iso()
+    persist_finish(batch_id)
     state.batches[batch_id]["summary"] = result.summary
 
     return {

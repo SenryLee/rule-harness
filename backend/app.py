@@ -25,6 +25,7 @@ from backend.routes.archive_routes import router as archive_router
 from backend.routes.batch_routes import router as batch_router
 from backend.routes.config_routes import router as config_router
 from backend.routes.dify_routes import router as dify_router
+from backend.routes.folder_routes import router as folder_router
 from backend.routes.rule_routes import router as rule_router
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ app.include_router(archive_router)
 app.include_router(batch_router)
 app.include_router(config_router)
 app.include_router(dify_router)
+app.include_router(folder_router)
 app.include_router(rule_router)
 
 _UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
@@ -80,6 +82,12 @@ def _init_db() -> None:
         logger.info("startup: data dirs ready, sqlite initialised")
     except Exception:
         logger.exception("storage.init_db failed; persistence will be degraded")
+    # v1.4：从 SQLite 恢复任务列表/导出索引（规则载荷懒加载），重启不丢任务
+    try:
+        from backend.batch_persist import restore_state_from_db
+        restore_state_from_db()
+    except Exception:
+        logger.exception("restore_state_from_db failed; task list starts empty")
 
 
 # ---------------------------------------------------------------------------

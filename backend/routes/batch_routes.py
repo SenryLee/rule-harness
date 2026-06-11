@@ -24,6 +24,8 @@ from ..orchestrator import (
 from ..preview import preview_classify_bytes, preview_classify_with_llm
 from ..skill_builder import SkillConfig, build_skill_zip, built_skill_to_dict
 from .. import state
+from .. import storage
+from ..batch_persist import persist_finish
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,35 @@ def _batch_dir(batch_id: str) -> Path:
 
 def _exports_dir(batch_id: str) -> Path:
     return _batch_dir(batch_id) / "exports"
+
+
+def auto_batch_name(file_metas: list[dict], when: datetime | None = None) -> str:
+    """规则拼装自动命名：主文件名(截断) + 件数 + 日期时间。"""
+    when = when or datetime.now()
+    names = [
+        str(m.get("original_name") or m.get("filename") or "").strip()
+        for m in file_metas
+    ]
+    names = [n for n in names if n]
+    stem = Path(names[0]).stem if names else "未命名任务"
+    if len(stem) > 18:
+        stem = stem[:18] + "…"
+    count_part = f" 等{len(names)}件" if len(names) > 1 else ""
+    return f"{stem}{count_part} · {when.strftime('%m-%d %H:%M')}"
+
+
+def get_batch_rules_cached(batch_id: str) -> list[dict]:
+    """优先内存，未命中（重启后）从 SQLite 载荷恢复并回填缓存。"""
+    rules = state.batch_rules.get(batch_id)
+    if rules is not None:
+        return rules
+    payload = storage.load_batch_payload(batch_id)
+    if payload is None:
+        return []
+    rules, decisions = payload
+    state.batch_rules[batch_id] = rules
+    state.batch_decisions[batch_id] = decisions
+    return rules
 
 
 # ---- Preview ----
@@ -80,6 +111,8 @@ async def create_batch(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     meta: str = Form(...),
+    name: str = Form(""),
+    folder_id: str = Form(""),
 ):
     try:
         file_metas: list[dict] = json.loads(meta)
@@ -109,8 +142,11 @@ async def create_batch(
         })
 
     now = _now_iso()
+    batch_name = name.strip() or auto_batch_name(saved_metas)
     state.batches[batch_id] = {
         "batch_id": batch_id,
+        "name": batch_name,
+        "folder_id": folder_id.strip(),
         "status": "running",
         "started_at": now,
         "finished_at": None,
@@ -120,8 +156,20 @@ async def create_batch(
     }
     state.batch_progress[batch_id] = BatchProgress(total_files=len(files))
 
+    # v1.4 持久化：创建即落库，重启/重新部署后任务列表不再丢失
+    try:
+        storage.upsert_batch_fields(batch_id, {
+            "started_at": now,
+            "status": "running",
+            "name": batch_name,
+            "folder_id": folder_id.strip(),
+            "file_metas": json.dumps(saved_metas, ensure_ascii=False),
+        })
+    except Exception:
+        logger.exception("persist batch create failed for %s", batch_id)
+
     background_tasks.add_task(_run_batch_task, batch_id, saved_metas)
-    return {"batch_id": batch_id, "status": "running"}
+    return {"batch_id": batch_id, "status": "running", "name": batch_name}
 
 
 async def _run_batch_task(batch_id: str, file_metas: list[dict]) -> None:
@@ -151,20 +199,30 @@ async def _run_batch_task(batch_id: str, file_metas: list[dict]) -> None:
         progress.status = "partial"
         state.batches[batch_id]["status"] = "partial"
         state.batches[batch_id]["finished_at"] = _now_iso()
+    # v1.4 持久化：完成状态 + 摘要 + 规则载荷（成功/失败都落库）
+    persist_finish(batch_id)
 
 
 @router.get("/batches")
-async def list_batches():
+async def list_batches(folder_id: Optional[str] = Query(None)):
+    batches = sorted(
+        state.batches.values(), key=lambda x: x["started_at"] or "", reverse=True
+    )
+    if folder_id is not None:
+        # folder_id="" 表示筛未归档
+        batches = [b for b in batches if (b.get("folder_id") or "") == folder_id]
     return [
         {
             "batch_id": b["batch_id"],
+            "name": b.get("name") or b["batch_id"],
+            "folder_id": b.get("folder_id") or "",
             "status": b["status"],
             "started_at": b["started_at"],
             "finished_at": b.get("finished_at"),
-            "total_files": b["total_files"],
+            "total_files": b.get("total_files", 0),
             "stats": b.get("summary", {}),
         }
-        for b in sorted(state.batches.values(), key=lambda x: x["started_at"], reverse=True)
+        for b in batches
     ]
 
 
@@ -174,6 +232,38 @@ async def get_batch(batch_id: str):
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
+
+
+@router.patch("/batches/{batch_id}")
+async def patch_batch(batch_id: str, payload: dict):
+    """重命名 / 移动到归档文件夹。payload: {name?: str, folder_id?: str}"""
+    batch = state.batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    updates: dict = {}
+    if "name" in payload:
+        new_name = str(payload["name"] or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=422, detail="任务名不能为空")
+        if len(new_name) > 60:
+            new_name = new_name[:60]
+        batch["name"] = new_name
+        updates["name"] = new_name
+    if "folder_id" in payload:
+        fid = str(payload["folder_id"] or "").strip()
+        if fid and storage.get_folder(fid) is None:
+            raise HTTPException(status_code=404, detail=f"Folder not found: {fid}")
+        batch["folder_id"] = fid
+        updates["folder_id"] = fid
+    if not updates:
+        raise HTTPException(status_code=422, detail="没有可更新的字段（支持 name / folder_id）")
+
+    try:
+        storage.upsert_batch_fields(batch_id, updates)
+    except Exception:
+        logger.exception("persist batch patch failed for %s", batch_id)
+    return {"batch_id": batch_id, **updates}
 
 
 @router.delete("/batches/{batch_id}")
@@ -189,6 +279,10 @@ async def delete_batch(batch_id: str):
     state.batch_decisions.pop(batch_id, None)
     state.batch_progress.pop(batch_id, None)
     state.batch_exports.pop(batch_id, None)
+    try:
+        storage.delete_batch_record(batch_id)
+    except Exception:
+        logger.exception("delete batch record failed for %s", batch_id)
 
     batch_dir = _batch_dir(batch_id)
     if batch_dir.exists():
@@ -276,7 +370,7 @@ async def list_batch_rules(
     if batch_id not in state.batches:
         raise HTTPException(status_code=404, detail="Batch not found")
 
-    rules = list(state.batch_rules.get(batch_id, []))
+    rules = list(get_batch_rules_cached(batch_id))
     if risk_level:
         if risk_level not in _RISK_LEVELS:
             raise HTTPException(status_code=422, detail=f"Invalid risk_level: {risk_level}")
@@ -302,92 +396,90 @@ async def list_batch_rules(
     return {"rules": items, "total": total, "page": page, "page_size": page_size}
 
 
-# ---- Exports ----
+# ---- Exports（v1.4：预制两个 + 自定义勾选） ----
 
-_EXPORT_KEYS: dict[str, str] = {
-    "main_csv": "main.csv",
-    "metadata_csv": "metadata.csv",
-    "conflict_report": "conflict_report.html",
-    "change_set": "change_set.csv",
-    "summary_html": "summary.html",
-    "placeholders_csv": "placeholders.csv",
-    "discarded_csv": "discarded.csv",
-    "negotiation_csv": "negotiation.csv",
-    "out_of_scope_csv": "out_of_scope.csv",
-    "skipped_csv": "skipped_blocks.csv",
-    "template_strategy_md": "template_strategy.md",
-}
+from urllib.parse import quote as _urlquote
+
+from fastapi.responses import Response
+
+from ..export_dicts import (
+    LOCATED_COLUMNS,
+    TEMPLATE_COLUMNS,
+    field_catalog,
+    rules_to_csv,
+)
 
 
-def _serve_export(batch_id: str, key: str, media_type: str, download_name: str):
-    if batch_id not in state.batches:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    exports = state.batch_exports.get(batch_id, {})
-    path = exports.get(key)
-    if path is None or not Path(path).exists():
-        fname = _EXPORT_KEYS.get(key)
-        if not fname:
-            raise HTTPException(status_code=404, detail=f"Unknown export key: {key}")
-        candidate = _exports_dir(batch_id) / fname
-        if not candidate.exists():
-            raise HTTPException(status_code=404, detail="Export not yet generated")
-        path = candidate
-    return FileResponse(path, media_type=media_type, filename=download_name)
+def _csv_response(csv_text: str, filename: str) -> Response:
+    return Response(
+        content="\ufeff" + csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{_urlquote(filename)}",
+        },
+    )
+
+
+def _main_rules(batch_id: str) -> list[dict]:
+    return [
+        r for r in get_batch_rules_cached(batch_id)
+        if (r.get("output_target") or "main") == "main"
+    ]
 
 
 @router.get("/batches/{batch_id}/exports/main-csv")
 async def export_main_csv(batch_id: str):
-    return _serve_export(batch_id, "main_csv", "text/csv", f"{batch_id}_main.csv")
+    """规则模板（严格 7 列）。实时从规则数据生成，旧任务恢复后同样可导。"""
+    if batch_id not in state.batches:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    name = state.batches[batch_id].get("name") or batch_id
+    return _csv_response(
+        rules_to_csv(_main_rules(batch_id), TEMPLATE_COLUMNS),
+        f"{name}_规则模板.csv",
+    )
 
 
-@router.get("/batches/{batch_id}/exports/metadata-csv")
-async def export_metadata_csv(batch_id: str):
-    return _serve_export(batch_id, "metadata_csv", "text/csv", f"{batch_id}_metadata.csv")
+@router.get("/batches/{batch_id}/exports/located-csv")
+async def export_located_csv(batch_id: str):
+    """规则导出（含原文定位）：7 列 + 来源文件/类别/段落定位/原文摘录/管道。"""
+    if batch_id not in state.batches:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    name = state.batches[batch_id].get("name") or batch_id
+    return _csv_response(
+        rules_to_csv(_main_rules(batch_id), LOCATED_COLUMNS),
+        f"{name}_规则导出_含原文定位.csv",
+    )
 
 
-@router.get("/batches/{batch_id}/exports/conflict-report")
-async def export_conflict_report(batch_id: str):
-    return _serve_export(batch_id, "conflict_report", "text/html", f"{batch_id}_conflicts.html")
+@router.get("/export-fields")
+async def list_export_fields():
+    """自定义导出可勾选字段目录（分组）。"""
+    return field_catalog()
 
 
-@router.get("/batches/{batch_id}/exports/change-set")
-async def export_change_set(batch_id: str):
-    return _serve_export(batch_id, "change_set", "text/csv", f"{batch_id}_changes.csv")
+@router.post("/batches/{batch_id}/exports/custom")
+async def export_custom_csv(batch_id: str, payload: dict):
+    """自定义导出。payload: {columns: [...], filters?: {risk_level?, output_target?, source_file?}}"""
+    if batch_id not in state.batches:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    columns = [str(c) for c in (payload.get("columns") or [])]
+    if not columns:
+        raise HTTPException(status_code=422, detail="至少勾选一个导出字段")
 
+    filters = payload.get("filters") or {}
+    rules = list(get_batch_rules_cached(batch_id))
+    target = filters.get("output_target")
+    if target and target != "all":
+        rules = [r for r in rules if (r.get("output_target") or "main") == target]
+    elif not target:
+        rules = [r for r in rules if (r.get("output_target") or "main") == "main"]
+    if filters.get("risk_level"):
+        rules = [r for r in rules if r.get("risk_level") == filters["risk_level"]]
+    if filters.get("source_file"):
+        rules = [r for r in rules if r.get("source_file") == filters["source_file"]]
 
-@router.get("/batches/{batch_id}/exports/summary")
-async def export_summary(batch_id: str):
-    return _serve_export(batch_id, "summary_html", "text/html", f"{batch_id}_summary.html")
-
-
-@router.get("/batches/{batch_id}/exports/placeholders-csv")
-async def export_placeholders(batch_id: str):
-    return _serve_export(batch_id, "placeholders_csv", "text/csv", f"{batch_id}_placeholders.csv")
-
-
-@router.get("/batches/{batch_id}/exports/discarded-csv")
-async def export_discarded(batch_id: str):
-    return _serve_export(batch_id, "discarded_csv", "text/csv", f"{batch_id}_discarded.csv")
-
-
-@router.get("/batches/{batch_id}/exports/negotiation-csv")
-async def export_negotiation(batch_id: str):
-    return _serve_export(batch_id, "negotiation_csv", "text/csv", f"{batch_id}_negotiation.csv")
-
-
-@router.get("/batches/{batch_id}/exports/out-of-scope-csv")
-async def export_out_of_scope(batch_id: str):
-    return _serve_export(batch_id, "out_of_scope_csv", "text/csv", f"{batch_id}_out_of_scope.csv")
-
-
-@router.get("/batches/{batch_id}/exports/skipped-csv")
-async def export_skipped(batch_id: str):
-    return _serve_export(batch_id, "skipped_csv", "text/csv", f"{batch_id}_skipped_blocks.csv")
-
-
-@router.get("/batches/{batch_id}/exports/template-strategy")
-async def export_template_strategy(batch_id: str):
-    return _serve_export(batch_id, "template_strategy_md", "text/markdown", f"{batch_id}_template_strategy.md")
+    name = state.batches[batch_id].get("name") or batch_id
+    return _csv_response(rules_to_csv(rules, columns), f"{name}_自定义导出.csv")
 
 
 # ---- Skill generation ----
@@ -400,7 +492,7 @@ async def generate_skill(batch_id: str, body: dict):
     if batch["status"] not in ("success", "partial", "merged"):
         raise HTTPException(status_code=409, detail="Batch is not ready")
 
-    rules = state.batch_rules.get(batch_id, [])
+    rules = get_batch_rules_cached(batch_id)
     if not rules:
         raise HTTPException(status_code=409, detail="No rules extracted in this batch")
 
