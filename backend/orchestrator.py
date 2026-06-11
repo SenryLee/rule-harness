@@ -32,20 +32,7 @@ from .config import Config, config_to_dict
 from .confidence import evaluate_confidence_batch
 from .dedupe import build_rule_ids, dedupe_with_priority
 from .document_profile import profile_document
-from .exporter import (
-    _partition_by_target,
-    export_change_set,
-    export_conflict_report,
-    export_discarded_csv,
-    export_main_csv,
-    export_metadata_csv,
-    export_negotiation_csv,
-    export_out_of_scope_csv,
-    export_placeholders_csv,
-    export_skipped_csv,
-    export_summary_html,
-    export_template_strategy_md,
-)
+from .exporter import _partition_by_target
 from .harness import build_rule_id, compute_fingerprint
 from .llm import LLMRouter, create_llm_router
 from .merger import MergeDecision, _encode_rule_for_merge, merge_rule
@@ -157,6 +144,8 @@ class BatchProgress:
     # v1.2：每文件正文字符数 + 本批颗粒度档位，用于规则密度（under_extracted）校验
     file_chars: dict[str, int] = field(default_factory=dict)
     granularity_level: int = 3
+    # v1.4：任务级密度下限覆盖（under_extracted 校验用；None=按档位默认）
+    density_min_override: float | None = None
     # 协作式取消：取消接口置 True，编排器在每个文本块/管道前检查并停止启动新工作，
     # 已抽规则照常去重/合并/导出，最终状态置 "cancelled"。
     cancel_requested: bool = False
@@ -449,6 +438,20 @@ def _apply_task_overrides(cfg: Config, file_metas: list[dict]) -> Config:
         if isinstance(value, str) and value.strip():
             changes[key] = value.strip()
 
+    # v1.4 细化旋钮（None=跟随档位；用 config 的解析器做 clamp/校验）
+    from .config import _opt_float, _opt_int
+
+    if (chunk := _opt_int(overrides.get("chunk_chars"), 600, 4000)) is not None:
+        changes["chunk_chars"] = chunk
+    if (dmin := _opt_float(overrides.get("density_min"), 0.1, 20.0)) is not None:
+        changes["density_min"] = dmin
+    if (dmax := _opt_float(overrides.get("density_max"), 0.1, 30.0)) is not None:
+        changes["density_max"] = dmax
+    if overrides.get("skip_strictness") in ("lenient", "strict"):
+        changes["skip_strictness"] = overrides["skip_strictness"]
+    if (dlevel := _opt_int(overrides.get("dedupe_level"), 1, 5)) is not None:
+        changes["dedupe_level"] = dlevel
+
     if not changes:
         return cfg
     return dc_replace(cfg, extraction=dc_replace(cfg.extraction, **changes))
@@ -676,11 +679,55 @@ def _format_document_profile(profile: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _finalize(candidates: list[RuleCandidate], cfg: Config) -> list[RuleCandidate]:
-    """Dedupe → fidelity → confidence → assign IDs. Pure-CPU, no LLM."""
+    """Dedupe → enrich → fidelity → confidence → assign IDs. Pure-CPU, no LLM."""
     deduped = dedupe_with_priority(candidates, cfg)
-    checked = _apply_fidelity_gate(deduped)
+    enriched = _enrich_short_requirements(deduped)
+    checked = _apply_fidelity_gate(enriched)
     scored = evaluate_confidence_batch(checked, cfg)
     return build_rule_ids(scored)
+
+
+# 审查要求四段式质量门：低于该长度视为"裸结论"，用已抽三要素本地组装增强
+_REQ_MIN_CHARS = 60
+_REQ_MAX_CHARS = 300
+# 只增强模型生成的正文/案例规则；直通(用户已有规则库)与红线阶梯保持原文不动
+_ENRICH_PIPELINES = frozenset({"P1", "P5"})
+
+
+def _enrich_short_requirements(candidates: list[RuleCandidate]) -> list[RuleCandidate]:
+    """v1.4：requirement 过短（模型没按四段式输出）时，用三要素+审查动作本地组装。
+
+    不调用 LLM——assumption/behavior_mode/exception_conditions/review_action
+    都是同一次抽取产出的素材，拼装零成本且不引入新的幻觉面。
+    增强发生在忠实度门之前，组装文本同样要过数值忠实校验。
+    """
+    out: list[RuleCandidate] = []
+    for rule in candidates:
+        req = (rule.requirement or "").strip()
+        if (
+            not req
+            or len(req) >= _REQ_MIN_CHARS
+            or rule.pipeline not in _ENRICH_PIPELINES
+            or rule.threshold_type == "占位"
+            or "核验" in req
+        ):
+            out.append(rule)
+            continue
+
+        parts = [req.rstrip("。；;")]
+        behavior = (rule.behavior_mode or "").strip().rstrip("。")
+        if behavior and behavior not in req:
+            parts.append(f"核验：{behavior}，并核对相应留痕证据")
+        exception = (rule.exception_conditions or "").strip().rstrip("。")
+        parts.append(f"例外：{exception}" if exception else "例外：原文未见明确例外")
+        action = (rule.review_action or "").strip().rstrip("。")
+        if action:
+            parts.append(f"不满足处理：{action}")
+        new_req = "。".join(parts) + "。"
+        if len(new_req) > _REQ_MAX_CHARS:
+            new_req = new_req[:_REQ_MAX_CHARS]
+        out.append(replace(rule, requirement=new_req))
+    return out
 
 
 def _update_fidelity_stats(progress: BatchProgress, rules: list[RuleCandidate]) -> None:
@@ -780,49 +827,30 @@ def _do_exports(
     exports_dir: Path,
     skipped_blocks: list[dict] | None = None,
 ) -> dict[str, Path]:
-    """v1.1: 按 output_target 分桶导出。
+    """v1.4 简化：默认只产两个预制导出。
 
-    主 CSV 只含实质规则；占位规则进 placeholders.csv；忠实度严重失败的进
-    discarded.csv；P4 阶梯进 negotiation.csv。元数据 / 冲突报告 / 摘要等
-    仍覆盖全部规则（含分类标记）。
+    - main.csv    规则模板（严格 7 列，与用户导入模板一致）
+    - located.csv 规则导出（含原文定位：来源文件/类别/段落定位/原文摘录/管道）
+
+    其余维度（三要素、质量分量、冲突等）一律走自定义导出接口按需勾选生成；
+    占位/弃用/范围外规则不再默认落盘，可在自定义导出按 output_target 过滤。
     """
+    from .export_dicts import LOCATED_COLUMNS, TEMPLATE_COLUMNS, rules_to_csv
+
     exports_dir.mkdir(parents=True, exist_ok=True)
     buckets = _partition_by_target(rules)
+    main_api = [candidate_to_api_dict(r) for r in buckets.get("main", [])]
 
     paths: dict[str, Path] = {
         "main_csv": exports_dir / "main.csv",
-        "metadata_csv": exports_dir / "metadata.csv",
-        "conflict_report": exports_dir / "conflict_report.html",
-        "change_set": exports_dir / "change_set.csv",
-        "summary_html": exports_dir / "summary.html",
+        "located_csv": exports_dir / "located.csv",
     }
-
-    export_main_csv(buckets.get("main", []), paths["main_csv"])
-    export_metadata_csv(rules, paths["metadata_csv"])
-    export_conflict_report(rules, batch_id, paths["conflict_report"])
-    export_change_set(decisions, paths["change_set"])
-    export_summary_html(rules, batch_id, None, paths["summary_html"])
-
-    # 仅在对应桶非空时导出，避免空文件污染
-    if buckets.get("placeholder"):
-        paths["placeholders_csv"] = exports_dir / "placeholders.csv"
-        export_placeholders_csv(buckets["placeholder"], paths["placeholders_csv"])
-    if buckets.get("discarded"):
-        paths["discarded_csv"] = exports_dir / "discarded.csv"
-        export_discarded_csv(buckets["discarded"], paths["discarded_csv"])
-    if buckets.get("negotiation"):
-        paths["negotiation_csv"] = exports_dir / "negotiation.csv"
-        export_negotiation_csv(buckets["negotiation"], paths["negotiation_csv"])
-    if buckets.get("out_of_scope"):
-        paths["out_of_scope_csv"] = exports_dir / "out_of_scope.csv"
-        export_out_of_scope_csv(buckets["out_of_scope"], paths["out_of_scope_csv"])
-    if skipped_blocks:
-        paths["skipped_csv"] = exports_dir / "skipped_blocks.csv"
-        export_skipped_csv(skipped_blocks, paths["skipped_csv"])
-    if any(getattr(rule, "task_mode", "") == "template_strategy" for rule in rules):
-        paths["template_strategy_md"] = exports_dir / "template_strategy.md"
-        export_template_strategy_md(rules, paths["template_strategy_md"])
-
+    paths["main_csv"].write_text(
+        "\ufeff" + rules_to_csv(main_api, TEMPLATE_COLUMNS), encoding="utf-8"
+    )
+    paths["located_csv"].write_text(
+        "\ufeff" + rules_to_csv(main_api, LOCATED_COLUMNS), encoding="utf-8"
+    )
     return paths
 
 
@@ -957,10 +985,13 @@ async def run_batch(
     ]
 
     progress.granularity_level = cfg.extraction.granularity_level
+    progress.density_min_override = cfg.extraction.density_min
 
     try:
         progress.current_step = "parsing"
-        chunk_chars = chunk_target_size(cfg.extraction.granularity_level)
+        chunk_chars = cfg.extraction.chunk_chars or chunk_target_size(
+            cfg.extraction.granularity_level
+        )
         docs = await _parse_all(
             parse_metas, batch_dir, progress, cfg.concurrency.files, chunk_chars
         )
@@ -1065,6 +1096,8 @@ def _under_extracted_files(
     from .pipelines.p1_body import GRANULARITY_DENSITY
 
     low_bound, _ = GRANULARITY_DENSITY.get(progress.granularity_level, (2.0, 4.0))
+    if progress.density_min_override is not None:
+        low_bound = progress.density_min_override
     out: list[dict] = []
     for filename, rules_count in sorted(rules_per_file.items()):
         chars = progress.file_chars.get(filename, 0)
