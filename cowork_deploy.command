@@ -25,6 +25,12 @@ LOG="$PWD/deploy_status.log"
     --exclude deploy_status.log \
     ./ tencent-gz:apps/rule-harness/
   if [ $? -ne 0 ]; then echo "RSYNC_FAILED"; exit 1; fi
+  # 纯代码目录用 --delete 镜像（本地删除的文件服务器同步删除）。
+  # 只限 backend/ 与 frontend/src/：这两个目录不含服务器独有文件
+  # （build-local.sh / data/ 在仓库根，绝不能对根目录用 --delete）。
+  rsync -az --delete --exclude __pycache__ backend/ tencent-gz:apps/rule-harness/backend/ \
+    && rsync -az --delete frontend/src/ tencent-gz:apps/rule-harness/frontend/src/
+  if [ $? -ne 0 ]; then echo "RSYNC_MIRROR_FAILED"; exit 1; fi
   echo "RSYNC_OK"
 
   echo "[2/3] 服务器构建 build-local.sh（docker build，需几分钟，请勿关闭窗口）..."
