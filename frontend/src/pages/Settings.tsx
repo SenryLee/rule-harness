@@ -18,9 +18,6 @@ export default function Settings() {
   const [tab, setTab] = useState<Tab>('model');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  // API Key draft 模式：input 永远绑定空字符串，真实 key 不进入 DOM/React state
-  // 用户未修改时 placeholder 提示"已配置"；修改后回传新值；未改则不回传（后端 _strip_blank_api_keys 兜底）
-  const [primaryApiKeyDraft, setPrimaryApiKeyDraft] = useState('');
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
@@ -30,16 +27,13 @@ export default function Settings() {
     if (!config) return;
     setSaving(true);
     try {
-      // 构建保存 payload：若用户未编辑 key 字段（draft 为空），清除 api_key 避免空值覆盖
+      // 安全策略：前端不接触 API Key。保存时删除所有 api_key 字段，
+      // 后端 _strip_all_api_keys 也会无条件剥离（双重保险）。
       const payload = JSON.parse(JSON.stringify(config));
-      if (!primaryApiKeyDraft.trim()) {
-        delete payload.models.primary.api_key;
-      } else {
-        payload.models.primary.api_key = primaryApiKeyDraft.trim();
-      }
+      delete payload.models.primary.api_key;
+      if (payload.models.fallback) delete payload.models.fallback.api_key;
       await updateConfig(payload as Config);
       setSaved(true);
-      setPrimaryApiKeyDraft(''); // 保存后重置 draft
       setTimeout(() => setSaved(false), 2000);
     } catch {
       // ignore
@@ -130,17 +124,14 @@ export default function Settings() {
               </div>
               <div>
                 <label className="text-xs text-[var(--text-muted)]">API Key</label>
-                <input
-                  className="input-field mt-1"
-                  type="password"
-                  value={primaryApiKeyDraft}
-                  placeholder={
-                    config.models.primary.api_key && !primaryApiKeyDraft
-                      ? '已配置（输入新 Key 覆盖）'
-                      : '输入 API Key'
-                  }
-                  onChange={(e) => setPrimaryApiKeyDraft(e.target.value)}
-                />
+                <div className="input-field mt-1 flex items-center justify-between bg-[var(--bg-secondary)] cursor-not-allowed">
+                  <span className="text-sm text-[var(--text-muted)]">
+                    {config.models.primary.api_key ? '由服务器环境变量管理' : '未配置（请联系运维设置环境变量）'}
+                  </span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-green)]/10 text-[var(--color-green)]">
+                    已隔离
+                  </span>
+                </div>
               </div>
             </div>
           </>

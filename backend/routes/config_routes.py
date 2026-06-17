@@ -39,19 +39,20 @@ def _deep_merge(base: dict, update: dict) -> None:
             base[k] = v
 
 
-def _strip_blank_api_keys(payload: dict) -> None:
-    """剥离 payload 里为空的 api_key，避免覆盖已存的密钥。
+def _strip_all_api_keys(payload: dict) -> None:
+    """无条件剥离 payload 里的 api_key 字段。
 
-    多个前端保存路径会回传整份 config；若某个组件在 key 尚未填充时保存，
-    payload 会带 api_key=""，blind merge 就会把服务器上已配置的密钥清空
-    （"每次更新后 key 丢失"的根因）。空值视为"不修改"，非空才更新。
+    安全策略：API Key 只通过服务器环境变量（DASHSCOPE_API_KEY /
+    RULE_HARNESS_API_KEY）或服务器本地 data/config.yaml 配置，
+    前端永远不接触明文 key。即使前端被篡改传回 api_key，后端也直接丢弃，
+    杜绝通过 PUT /api/config 注入/覆盖密钥的可能。
     """
     models = payload.get("models")
     if not isinstance(models, dict):
         return
     for slot in ("primary", "fallback"):
         slot_cfg = models.get(slot)
-        if isinstance(slot_cfg, dict) and not str(slot_cfg.get("api_key", "") or "").strip():
+        if isinstance(slot_cfg, dict):
             slot_cfg.pop("api_key", None)
 
 
@@ -67,7 +68,7 @@ async def get_config():
 async def update_config(payload: dict):
     cfg = load_config()
     merged = config_to_dict(cfg)
-    _strip_blank_api_keys(payload)
+    _strip_all_api_keys(payload)
     _deep_merge(merged, payload)
     raw = yaml.safe_load(yaml.safe_dump(merged, allow_unicode=True))
     new_cfg = _parse_config(raw)
