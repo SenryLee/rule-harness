@@ -292,6 +292,23 @@ def _model_to_dict(model: ModelConfig) -> dict:
     }
 
 
+def _mask_api_key(key: str) -> str:
+    """脱敏 API Key：保留前缀和末尾 4 位，中间用 ••• 替换。
+
+    用途：GET /api/config 等面向前端的响应，避免明文密钥泄露到浏览器/DOM。
+    规则：
+      空串 → "" （未配置）
+      ≤8 字符 → "•••"（太短无法展示有用信息）
+      >8 字符 → 前 min(7,len-4) 位 + "•••" + 后 4 位
+    """
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "•••"
+    visible = max(3, len(key) - 8)
+    return f"{key[:visible]}•••{key[-4:]}"
+
+
 def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
     return {
         "granularity": extraction.granularity,
@@ -314,11 +331,16 @@ def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
     }
 
 
-def config_to_dict(cfg: Config) -> dict:
+def config_to_dict(cfg: Config, sanitize_keys: bool = False) -> dict:
+    primary = _model_to_dict(cfg.models.primary)
+    fallback = _model_to_dict(cfg.models.fallback)
+    if sanitize_keys:
+        for slot in (primary, fallback):
+            slot["api_key"] = _mask_api_key(slot["api_key"])
     return {
         "models": {
-            "primary": _model_to_dict(cfg.models.primary),
-            "fallback": _model_to_dict(cfg.models.fallback),
+            "primary": primary,
+            "fallback": fallback,
         },
         "extraction": _extraction_to_dict(cfg.extraction),
         "priorities": {

@@ -60,7 +60,7 @@ def _strip_blank_api_keys(payload: dict) -> None:
 @router.get("/config")
 async def get_config():
     cfg = load_config()
-    return config_to_dict(cfg)
+    return config_to_dict(cfg, sanitize_keys=True)
 
 
 @router.put("/config")
@@ -72,7 +72,7 @@ async def update_config(payload: dict):
     raw = yaml.safe_load(yaml.safe_dump(merged, allow_unicode=True))
     new_cfg = _parse_config(raw)
     save_config(new_cfg)
-    return config_to_dict(new_cfg)
+    return config_to_dict(new_cfg, sanitize_keys=True)
 
 
 # ---- Profiles ----

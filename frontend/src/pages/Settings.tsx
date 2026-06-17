@@ -18,6 +18,9 @@ export default function Settings() {
   const [tab, setTab] = useState<Tab>('model');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // API Key draft 模式：input 永远绑定空字符串，真实 key 不进入 DOM/React state
+  // 用户未修改时 placeholder 提示"已配置"；修改后回传新值；未改则不回传（后端 _strip_blank_api_keys 兜底）
+  const [primaryApiKeyDraft, setPrimaryApiKeyDraft] = useState('');
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
@@ -27,8 +30,16 @@ export default function Settings() {
     if (!config) return;
     setSaving(true);
     try {
-      await updateConfig(config);
+      // 构建保存 payload：若用户未编辑 key 字段（draft 为空），清除 api_key 避免空值覆盖
+      const payload = JSON.parse(JSON.stringify(config));
+      if (!primaryApiKeyDraft.trim()) {
+        delete payload.models.primary.api_key;
+      } else {
+        payload.models.primary.api_key = primaryApiKeyDraft.trim();
+      }
+      await updateConfig(payload as Config);
       setSaved(true);
+      setPrimaryApiKeyDraft(''); // 保存后重置 draft
       setTimeout(() => setSaved(false), 2000);
     } catch {
       // ignore
@@ -122,8 +133,13 @@ export default function Settings() {
                 <input
                   className="input-field mt-1"
                   type="password"
-                  value={config.models.primary.api_key}
-                  onChange={(e) => updateField('models.primary.api_key', e.target.value)}
+                  value={primaryApiKeyDraft}
+                  placeholder={
+                    config.models.primary.api_key && !primaryApiKeyDraft
+                      ? '已配置（输入新 Key 覆盖）'
+                      : '输入 API Key'
+                  }
+                  onChange={(e) => setPrimaryApiKeyDraft(e.target.value)}
                 />
               </div>
             </div>
