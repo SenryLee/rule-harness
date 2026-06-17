@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, validate_atomic
+from ..harness import THEME_KEYS, take_excerpt, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RevisionBlock, RuleCandidate
 from .errors import record_llm_failure
@@ -134,6 +134,7 @@ class P3RevisionPipeline:
             if isinstance(kws, str):
                 kws = [k.strip() for k in kws.split(",") if k.strip()]
             failures = validate_atomic(rule)
+            _take_excerpt_value, _take_excerpt_fallback = take_excerpt(rule, rev.revised_text)
             out.append(RuleCandidate(
                 risk_level=str(rule.get("risk_level", "中")),
                 keywords=tuple(kws),
@@ -146,7 +147,7 @@ class P3RevisionPipeline:
                 predicate=str(rule.get("predicate", "")),
                 threshold_type=str(rule.get("threshold_type", "无")),
                 direction=str(rule.get("direction", "正向")),
-                source_excerpt=rev.revised_text,
+                source_excerpt=_take_excerpt_value,
                 source_location=rev.location,
                 pipeline=self.pipeline_id,
                 self_confidence=float(rule.get("self_confidence", 0.5)),
@@ -159,6 +160,8 @@ class P3RevisionPipeline:
                 model=self.router.primary.name if self.router.primary else "",
                 struct_check_pass=(len(failures) == 0),
                 struct_failures=tuple(failures),
+                excerpt_fallback=_take_excerpt_fallback,
+                raw_block_text=rev.revised_text,
             ))
 
         return out

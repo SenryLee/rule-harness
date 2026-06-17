@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, validate_atomic
+from ..harness import THEME_KEYS, take_excerpt, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate
 from .errors import record_llm_failure
@@ -89,6 +89,8 @@ class P5CasePipeline:
             rule_type = str(rule.get("rule_type", "negative") or "negative")
             direction = str(rule.get("direction", "反向") or "反向")
 
+            _take_excerpt_value, _take_excerpt_fallback = take_excerpt(rule, chunk.text)
+
             candidate = RuleCandidate(
                 risk_level=str(rule.get("risk_level", "高")),
                 keywords=tuple(kws),
@@ -101,7 +103,7 @@ class P5CasePipeline:
                 predicate=str(rule.get("predicate", "")),
                 threshold_type=str(rule.get("threshold_type", "列表")),
                 direction=direction,
-                source_excerpt=chunk.text,
+                source_excerpt=_take_excerpt_value,
                 source_location=chunk.location,
                 pipeline=self.pipeline_id,
                 self_confidence=float(rule.get("self_confidence", 0.5)),
@@ -115,6 +117,8 @@ class P5CasePipeline:
                 struct_check_pass=struct_ok,
                 struct_failures=tuple(failures),
                 cited_cases=tuple(cited) if cited else None,
+                excerpt_fallback=_take_excerpt_fallback,
+                raw_block_text=chunk.text,
             )
             results.append(candidate)
 

@@ -92,6 +92,17 @@ class RuleCandidate:
     fidelity_pass: bool = True
     fidelity_failures: tuple[str, ...] = ()
     voice_match: bool = True
+    # v2.0 摘录忠实：标记 source_excerpt 是模型精准摘录(False) 还是回退整块(True)
+    excerpt_fallback: bool = False
+    excerpt_mismatch: bool = False  # 摘录无法在原文定位 → True
+    excerpt_fuzzy: bool = False  # 摘录经 difflib 模糊回填 → True
+    raw_block_text: str = ""  # 保留原始块文本，供 verify_excerpt 模糊回填使用
+    # v2.0 语义忠实度（关键短语回溯）
+    semantic_pass: bool = True
+    semantic_failures: tuple[str, ...] = ()
+    semantic_deviation: float = 0.0
+    # v2.0 通用化重写标记
+    genericized: bool = False
     output_target: str = "main"  # main / placeholder / negotiation / discarded
     task_mode: str = "full_library"
     scope_match: str = "in_scope"
@@ -104,6 +115,13 @@ class RuleCandidate:
     exception_conditions: str = ""
     review_action: str = ""
     transformation_note: str = ""
+    # 合同抽取优化（来源角色分流 / 通用化 / 适用范围）
+    # source_role: template(范本/范例) | instance(历史合同/案例) | norm(法规/制度/红线) | rulebase(已有规则库)
+    source_role: str = ""
+    # generalizable: 通用(可复用) | 实例(含实例特定事实，已泛化或待人工确认) | 待定
+    generalizable: str = "通用"
+    instance_facts: str = ""      # 检出的实例特定事实（具名主体/日期/账号等），审计用
+    applicable_scope: str = "通用"  # 通用 | 具体合同类型（顿号分隔）
 
 
 _DOCX_EXT = {".docx"}
@@ -337,7 +355,133 @@ def parse_doc(
     )
 
 
+# 真正二进制 .doc（OLE2 复合文档）的魔数；命中才交给 antiword/catdoc。
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _xml_localname(tag: object) -> str:
+    """取 XML 标签的本地名（去掉命名空间），WordML 的 w:t / w:p 等按本地名匹配。"""
+    if isinstance(tag, str):
+        return tag.rsplit("}", 1)[-1]
+    return ""
+
+
+def _wordml_text(xml_bytes: bytes) -> str:
+    """从 WordprocessingML（Word2003 XML 或 docx 的 document.xml）抽正文。
+
+    按文档顺序遍历：遇到新的 <w:p> 就把上一段累积的 run 文本作为一段落盘
+    （iter() 父在子前，故在段落起点 flush 的是上一段）；<w:t> 收文字，
+    <w:tab>/<w:br> 作分隔。段落间用双换行，便于下游按段切块。
+    """
+    from lxml import etree
+
+    root = etree.fromstring(xml_bytes)
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for el in root.iter():
+        name = _xml_localname(el.tag)
+        if name == "t":
+            if el.text:
+                current.append(el.text)
+        elif name == "tab":
+            current.append("\t")
+        elif name in ("br", "cr"):
+            current.append("\n")
+        elif name == "p":
+            line = "".join(current).strip()
+            if line:
+                paragraphs.append(line)
+            current = []
+    tail = "".join(current).strip()
+    if tail:
+        paragraphs.append(tail)
+    return "\n\n".join(paragraphs)
+
+
+def _strip_rtf(rtf: str) -> str:
+    """极简 RTF→文本：还原 unicode/十六进制转义、\\par 转换行、去控制字与分组括号。"""
+    s = re.sub(r"\\u(-?\d+)\??", lambda m: chr(int(m.group(1)) % 0x10000), rtf)
+    s = re.sub(
+        r"\\'([0-9a-fA-F]{2})",
+        lambda m: bytes([int(m.group(1), 16)]).decode("latin-1", "ignore"),
+        s,
+    )
+    s = re.sub(r"\\par[d]?\b", "\n", s)
+    s = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", s)  # 其余控制字
+    s = s.replace("{", "").replace("}", "")
+    s = re.sub(r"[ \t]+", " ", s)
+    return s.strip()
+
+
+def _extract_pseudo_doc_text(filepath: Path) -> tuple[str | None, str | None]:
+    """识别"改了扩展名的非二进制 .doc"（Word2003 XML / docx-zip / RTF / HTML）并直接抽文本。
+
+    返回 (text, warning)；认不出真实格式（含真正的 OLE2 二进制）时返回 (None, None)，
+    交由调用方走 antiword/catdoc。铁路/政企系统常导出这类"假 .doc"，转换器读不了。
+    """
+    try:
+        head = filepath.read_bytes()[:4096]
+    except OSError as exc:
+        return None, f"pseudo_doc_read_failed:{type(exc).__name__}"
+
+    if head[:8] == _OLE2_MAGIC:
+        return None, None  # 真二进制 .doc → 交给转换器
+
+    if head[:4] == b"PK\x03\x04":  # 实为 docx（zip）
+        try:
+            import zipfile
+
+            with zipfile.ZipFile(filepath) as zf:
+                if "word/document.xml" not in zf.namelist():
+                    return None, None
+                xml = zf.read("word/document.xml")
+            text = _wordml_text(xml)
+            return (text, None) if text.strip() else (None, "docx_zip_empty")
+        except Exception as exc:  # noqa: BLE001
+            return None, f"docx_zip_failed:{type(exc).__name__}"
+
+    stripped = head.lstrip()
+    lower = stripped[:512].lower()
+    if stripped[:5] == b"<?xml" or b"<w:worddocument" in lower or b"mso-application" in lower:
+        try:
+            text = _wordml_text(filepath.read_bytes())
+            return (text, None) if text.strip() else (None, "wordml_empty")
+        except Exception as exc:  # noqa: BLE001
+            return None, f"wordml_parse_failed:{type(exc).__name__}"
+
+    if stripped[:5].lower() == b"{\\rtf":
+        try:
+            text = _strip_rtf(filepath.read_text(encoding="utf-8", errors="ignore"))
+            return (text, None) if text.strip() else (None, "rtf_empty")
+        except Exception as exc:  # noqa: BLE001
+            return None, f"rtf_parse_failed:{type(exc).__name__}"
+
+    if (
+        lower.startswith(b"<html")
+        or lower.startswith(b"<!doctype html")
+        or b"mime-version" in lower
+        or b"<body" in lower
+    ):
+        try:
+            from lxml import html as lxml_html
+
+            text = lxml_html.fromstring(filepath.read_bytes()).text_content()
+            lines = [ln.strip() for ln in text.splitlines()]
+            text = "\n".join(ln for ln in lines if ln)
+            return (text, None) if text.strip() else (None, "html_empty")
+        except Exception as exc:  # noqa: BLE001
+            return None, f"html_parse_failed:{type(exc).__name__}"
+
+    return None, None
+
+
 def _extract_doc_text(filepath: Path) -> tuple[str, str | None]:
+    # 很多"假 .doc"其实是 Word2003 XML / docx(zip) / RTF / HTML，二进制转换器读不了。
+    # 先按真实格式直接抽取，认不出再走 antiword/catdoc。
+    pseudo_text, pseudo_warn = _extract_pseudo_doc_text(filepath)
+    if pseudo_text and pseudo_text.strip():
+        return pseudo_text, None
+
     commands = [
         ("textutil", ["textutil", "-convert", "txt", "-stdout", str(filepath)]),
         ("antiword", ["antiword", str(filepath)]),
@@ -345,6 +489,8 @@ def _extract_doc_text(filepath: Path) -> tuple[str, str | None]:
     ]
     missing: list[str] = []
     failures: list[str] = []
+    if pseudo_warn:
+        failures.append(pseudo_warn)
 
     for tool, cmd in commands:
         if shutil.which(tool) is None:

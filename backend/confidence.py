@@ -16,6 +16,7 @@ import logging
 from dataclasses import replace
 
 from .config import Config
+from .fidelity import is_low_severity
 from .harness import compute_fingerprint
 from .llm import LLMRouter
 from .parsers import RuleCandidate
@@ -28,18 +29,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def evaluate_confidence(rule: RuleCandidate, cfg: Config) -> RuleCandidate:
-    """综合置信度 = 自评 + 一致性 + 结构 + 冲突 + **忠实度**（v1.1 新增第五重门）。
+    """综合置信度 = 自评 + 一致性 + 结构 + 冲突 + 忠实度 + **语义忠实度**（v2.0 新增第六重门）。
 
-    cfg.confidence.weights 现在含 5 项；为兼容旧 yaml（只配 4 项），未配置的
-    ``fidelity`` 权重缺省取 0.30，并把现有 4 项按比例缩到 0.70（详见
-    :func:`_resolve_weights`）。
+    v2.0 改进：``consistency_score`` 不再直接等于 ``self_score``（根因 C 修复）。
+    改为基于多门表现的衍生分数： ``(fidelity + semantic + struct) / 3``。
+    这反映了"规则在多道校验门中的一致性表现"——通过了所有门的规则一致性高，
+    任一门失败的规则一致性降低。零 LLM 成本，可审计。
+
+    cfg.confidence.weights 现在含 6 项；为兼容旧 yaml（只配 4-5 项），未配置的
+    ``fidelity`` 权重缺省取 0.25、``semantic`` 权重缺省取 0.15，并把现有项按比例
+    缩放（详见 :func:`_resolve_weights`）。
     """
     weights = _resolve_weights(cfg)
     self_score = _clamp01(rule.self_confidence)
-    consistency_score = self_score  # apply_consistency() 会覆盖
     struct_score = 1.0 if rule.struct_check_pass else 0.0
     conflict_score = 1.0 if rule.conflict_flag == "无" else 0.0
     fidelity_score = 1.0 if rule.fidelity_pass else 0.0
+    # v2.0: 语义忠实度——通过则满分，未通过则按偏离率扣分
+    semantic_score = 1.0 if rule.semantic_pass else _clamp01(1.0 - rule.semantic_deviation)
+    # v2.0: 一致性分数改为多门衍生（根因 C 修复，不再等于 self_score）
+    consistency_score = (fidelity_score + semantic_score + struct_score) / 3.0
 
     combined = (
         weights["self"] * self_score
@@ -47,12 +56,21 @@ def evaluate_confidence(rule: RuleCandidate, cfg: Config) -> RuleCandidate:
         + weights["struct"] * struct_score
         + weights["conflict"] * conflict_score
         + weights["fidelity"] * fidelity_score
+        + weights["semantic"] * semantic_score
     )
-    return replace(rule, combined_confidence=round(_clamp01(combined), 4))
+    combined = _clamp01(combined)
+
+    # v2.0 根因 G: 单数字失败强制降级——1 个数字 ground 不上时，
+    # 强制 combined_confidence < threshold_review（0.7），确保触发人工复核。
+    # ≥2 个失败已在 _apply_fidelity_gate 中被 discarded，此处只处理 1 个的情况。
+    if is_low_severity(rule.fidelity_failures):
+        combined = min(combined, 0.69)
+
+    return replace(rule, combined_confidence=round(combined, 4))
 
 
 def _resolve_weights(cfg: Config) -> dict[str, float]:
-    """读出 5 项权重，对仍是 4 项的旧配置自动迁移。"""
+    """读出 6 项权重，对仍是 4-5 项的旧配置自动迁移。"""
     w = cfg.confidence.weights
     base = {
         "self": float(w.self_),
@@ -61,12 +79,24 @@ def _resolve_weights(cfg: Config) -> dict[str, float]:
         "conflict": float(w.conflict),
     }
     fidelity = float(getattr(w, "fidelity", 0.0) or 0.0)
-    if fidelity > 0:
+    semantic = float(getattr(w, "semantic", 0.0) or 0.0)
+
+    if fidelity > 0 and semantic > 0:
         base["fidelity"] = fidelity
+        base["semantic"] = semantic
         return base
-    # 旧配置：把 4 项按 0.7 缩放，给 fidelity 留 0.30
-    scale = 0.7 / max(sum(base.values()), 1e-9)
-    return {**{k: v * scale for k, v in base.items()}, "fidelity": 0.30}
+    if fidelity > 0 and semantic <= 0:
+        # 有 fidelity 无 semantic：从 fidelity 中拆出 semantic
+        base["fidelity"] = fidelity * 0.625  # 0.25/0.40 比例
+        base["semantic"] = fidelity * 0.375
+        return base
+    # 旧配置（4 项无 fidelity/semantic）：按 0.6 缩放，给 fidelity 0.25 + semantic 0.15
+    scale = 0.6 / max(sum(base.values()), 1e-9)
+    return {
+        **{k: v * scale for k, v in base.items()},
+        "fidelity": 0.25,
+        "semantic": 0.15,
+    }
 
 
 def evaluate_confidence_batch(rules: list[RuleCandidate], cfg: Config) -> list[RuleCandidate]:
@@ -107,10 +137,14 @@ def compute_confidence_summary(rules: list[RuleCandidate]) -> dict:
 # ---------------------------------------------------------------------------
 
 def _should_double_sample(rule: RuleCandidate, cfg: Config) -> bool:
-    """Per PRD §5.2: only re-sample high-risk or red-line-keyword-hit candidates."""
-    if not cfg.extraction.consistency_sampling:
-        return False
-    if rule.risk_level == "高":
+    """Per PRD §5.2: only re-sample high-risk or red-line-keyword-hit candidates.
+
+    v2.0: 即使 ``consistency_sampling=false``，若 ``consistency_sampling_high_risk_only=true``
+    且 ``risk_level=高``，也触发双采样（根因 C 修复——高风险规则不再跳过一致性门）。
+    """
+    if cfg.extraction.consistency_sampling:
+        return True  # 全局开启 → 所有规则都可双采样
+    if cfg.extraction.consistency_sampling_high_risk_only and rule.risk_level == "高":
         return True
     return any(kw in rule.source_excerpt for kw in cfg.extraction.redline_keywords)
 

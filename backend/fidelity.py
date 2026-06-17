@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
@@ -184,3 +184,60 @@ def check_fidelity(
 def is_low_severity(failures: tuple[str, ...]) -> bool:
     """单一不能 ground 的数字 → 低严重度（降级该规则，不丢）；≥2 → 高严重度（丢弃）。"""
     return 0 < len(failures) <= 1
+
+
+# ---------------------------------------------------------------------------
+# v2.0 摘录后处理校验
+# ---------------------------------------------------------------------------
+
+# 避免循环导入：TYPE_CHECKING 下引用 RuleCandidate
+from typing import TYPE_CHECKING, Any  # noqa: E402
+
+if TYPE_CHECKING:
+    from .parsers import RuleCandidate
+
+
+def verify_excerpt(rule: "RuleCandidate") -> "RuleCandidate":
+    """摘录后处理校验（v2.0 新增）。
+
+    在 orchestrator 校验链中运行，对管道层 ``take_excerpt`` 的结果做二次复核：
+
+    1. ``excerpt_fallback=True`` → 摘录已是整块回退，跳过（无需再校验）
+    2. ``excerpt_fallback=False`` → 归一化子串校验：
+       a. ``normalize(excerpt)`` 是 ``normalize(raw_block_text)`` 的子串 → 精准命中，通过
+       b. 未命中 → 用 difflib 计算最长公共子串覆盖率：
+          - 覆盖率 ≥ 0.8 → 保留模型摘录，标 ``excerpt_fuzzy=True``
+          - 覆盖率 < 0.8 → 回退整块（``source_excerpt=raw_block_text``），
+            标 ``excerpt_fallback=True`` + ``excerpt_mismatch=True``
+
+    返回新的 RuleCandidate（frozen dataclass 用 replace 创建副本）。
+    """
+    if rule.excerpt_fallback:
+        return rule
+    if not rule.source_excerpt or not rule.raw_block_text:
+        return rule
+
+    norm_excerpt = _normalize(rule.source_excerpt)
+    norm_block = _normalize(rule.raw_block_text)
+
+    # 情况 a：归一化子串命中
+    if norm_excerpt and norm_excerpt in norm_block:
+        return rule
+
+    # 情况 b：未命中 → difflib 覆盖率评估
+    import difflib
+
+    sm = difflib.SequenceMatcher(None, norm_excerpt, norm_block, autojunk=False)
+    match = sm.find_longest_match(0, len(norm_excerpt), 0, len(norm_block))
+    coverage = (match.size / len(norm_excerpt)) if norm_excerpt else 0.0
+
+    if coverage >= 0.8:
+        # 模糊匹配：保留模型摘录，标记 fuzzy
+        return replace(rule, excerpt_fuzzy=True)
+    # 覆盖率过低：回退整块 + 标记 mismatch
+    return replace(
+        rule,
+        source_excerpt=rule.raw_block_text,
+        excerpt_fallback=True,
+        excerpt_mismatch=True,
+    )

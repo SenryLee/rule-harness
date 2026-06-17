@@ -57,6 +57,22 @@ def normalize_text(text: str) -> str:
     return _NON_WORD_CJK_RX.sub("", text.casefold())
 
 
+def take_excerpt(rule: dict, fallback_text: str) -> tuple[str, bool]:
+    """v2.0 摘录精准化（管道层最小回退）：
+
+    返回 (excerpt, fallback_flag)：
+      - 模型给了非空 source_excerpt → (candidate, False)
+      - 模型未给 → (fallback_text, True)
+
+    归一化子串校验、difflib 模糊回填、mismatch 标记由
+    :func:`backend.fidelity.verify_excerpt` 在校验链统一完成。
+    """
+    candidate = str(rule.get("source_excerpt", "") or "").strip()
+    if not candidate:
+        return fallback_text, True
+    return candidate, False
+
+
 def compute_fingerprint(rule: dict) -> str:
     parts = [
         normalize_text(rule.get("theme_key", "")),
@@ -93,17 +109,21 @@ def validate_atomic(rule: dict) -> list[str]:
 
     if len(check_item) > 40:
         failures.append("check_item_too_long")
-    if len(requirement) > 200:
+    # v2.0: requirement 上限从 200 放宽到 240，对齐 prompt 的"80-180字，上限240字"要求
+    if len(requirement) > 240:
         failures.append("requirement_too_long")
     if len(notes) > 500:
         failures.append("notes_too_long")
 
-    if any(c in check_item for c in STRICT_CONNECTORS):
+    # v2.0: check_item 连接词判定加长度门槛——短复合项（≤40字）允许使用"且/并且/同时"，
+    # 仅当连接词出现且 check_item 过长时才视为非原子。
+    if any(c in check_item for c in STRICT_CONNECTORS) and len(check_item) > 40:
         failures.append("check_item_not_atomic")
 
-    # 多阈值检测：同一数字重复出现不算冲突；至少 2 个不同的数字 token 才视为多阈值。
+    # v2.0: 多阈值检测放宽——允许 2-3 个不同数字（合法的"下限+上限""比例+期限"复合规则），
+    # 仅当 4 个及以上不同数字 token 才视为多阈值非原子。
     nums = NUMERIC_RX.findall(requirement)
-    if len(set(nums)) >= 2:
+    if len(set(nums)) >= 4:
         failures.append("requirement_multi_threshold")
 
     if not requirement.startswith(("[条款]", "[合规]")):

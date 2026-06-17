@@ -31,6 +31,8 @@ from .chunker import chunk_document, chunk_target_size
 from .config import Config, config_to_dict
 from .confidence import evaluate_confidence_batch
 from .dedupe import build_rule_ids, dedupe_with_priority
+from .source_roles import annotate_source_roles
+from .genericize import annotate_generalizable, genericize_instances
 from .document_profile import profile_document
 from .exporter import _partition_by_target
 from .harness import build_rule_id, compute_fingerprint
@@ -149,6 +151,9 @@ class BatchProgress:
     # 协作式取消：取消接口置 True，编排器在每个文本块/管道前检查并停止启动新工作，
     # 已抽规则照常去重/合并/导出，最终状态置 "cancelled"。
     cancel_requested: bool = False
+    # 规则去向漏斗：抽取 → 去重折叠 → 忠实度丢弃 → 占位/范围外 → 最终主表。
+    # 让"运行期 170、最终 80"的落差可解释、不再像黑箱。run_batch 收尾时填充。
+    disposition: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.pipeline_progress:
@@ -177,6 +182,7 @@ class BatchProgress:
             },
             "fidelity_stats": self.fidelity_stats.to_dict(),
             "skipped_blocks": len(self.skipped_blocks),
+            "disposition": dict(self.disposition),
         }
 
     def prepare_pipeline_progress(self, docs: list[ParsedDocument], instances: list[object]) -> None:
@@ -730,6 +736,31 @@ def _enrich_short_requirements(candidates: list[RuleCandidate]) -> list[RuleCand
     return out
 
 
+def _build_disposition(raw_extracted: int, rules: list[RuleCandidate]) -> dict:
+    """规则去向漏斗：把"运行期抽了多少、最终主表只剩多少"的每一步落差讲清楚。
+
+    - extracted          各管道原始抽取总数（运行期进度条累计的那个数）
+    - merged_as_variants 去重时折叠进主规则的变体数（未消失，存于规则的 variant_versions）
+    - discarded          忠实度门拦截丢弃（数值/口径与原文不符 ≥2 项）
+    - placeholder        占位规则（原文留空待填，分流到占位桶不进主表）
+    - out_of_scope       模板模式下与本次模板/范围无关的规则
+    - final_main         默认导出主表里的规则数（用户最终看到的那个数）
+    """
+    after_dedupe = len(rules)
+    by_target: dict[str, int] = {}
+    for r in rules:
+        by_target[r.output_target] = by_target.get(r.output_target, 0) + 1
+    return {
+        "extracted": raw_extracted,
+        "merged_as_variants": max(0, raw_extracted - after_dedupe),
+        "after_dedupe": after_dedupe,
+        "discarded": by_target.get("discarded", 0),
+        "placeholder": by_target.get("placeholder", 0),
+        "out_of_scope": by_target.get("out_of_scope", 0),
+        "final_main": by_target.get("main", 0),
+    }
+
+
 def _update_fidelity_stats(progress: BatchProgress, rules: list[RuleCandidate]) -> None:
     progress.fidelity_stats = FidelityStats(
         intercepted=sum(1 for r in rules if not r.fidelity_pass),
@@ -742,10 +773,13 @@ def _update_fidelity_stats(progress: BatchProgress, rules: list[RuleCandidate]) 
 def _apply_fidelity_gate(candidates: list[RuleCandidate]) -> list[RuleCandidate]:
     """v1.1 第五重门 + 语态校验 + 占位规则分流。
 
+    v2.0 新增：摘录后处理校验（verify_excerpt）+ 语义忠实度校验（semantic_fidelity）。
+
     一条候选规则的最终 ``output_target`` 决策表（按优先级从上到下）：
 
         条件                                          → output_target
         ----------------------------------------------- ----------------
+        语义偏离率 > 0.7                              → "discarded"
         fidelity 失败 token 数 ≥ 2                    → "discarded"
         是占位规则（is_placeholder_rule）             → "placeholder"
         以上都不是                                    → 保持原值（默认 "main"）
@@ -753,23 +787,40 @@ def _apply_fidelity_gate(candidates: list[RuleCandidate]) -> list[RuleCandidate]
     同时记录：
       - ``fidelity_pass`` + ``fidelity_failures``
       - ``voice_match``（软语态原文却写了强义务 → False）
+      - ``semantic_pass`` + ``semantic_failures`` + ``semantic_deviation``
+      - ``excerpt_fuzzy`` / ``excerpt_mismatch``（由 verify_excerpt 设置）
     """
-    from .fidelity import check_fidelity
+    from .fidelity import check_fidelity, verify_excerpt
+    from .semantic_fidelity import check_semantic_fidelity, should_discard
     from .voice_check import check_voice_match
     from .placeholder_detector import is_placeholder_rule
 
     out: list[RuleCandidate] = []
     for rule in candidates:
+        # v2.0: 摘录后处理校验（归一化子串复核 + difflib 模糊回填 + mismatch 标记）
+        # 必须在 check_fidelity 之前运行——可能把 source_excerpt 回退为整块，
+        # 影响 fidelity 的数字 grounding 范围。
+        rule = verify_excerpt(rule)
+
         result = check_fidelity(
             requirement=rule.requirement,
             check_item=rule.check_item,
             notes=rule.notes,
             source_excerpt=rule.source_excerpt,
         )
-        voice_failures = check_voice_match(rule.source_excerpt, rule.requirement)
+        voice_failures = check_voice_match(
+            rule.source_excerpt, rule.requirement, rule.check_item, rule.notes
+        )
+        sem_result = check_semantic_fidelity(
+            requirement=rule.requirement,
+            check_item=rule.check_item,
+            source_excerpt=rule.source_excerpt,
+        )
 
         new_target = rule.output_target
-        if not result.passed and len(result.failures) >= 2:
+        if should_discard(sem_result):
+            new_target = "discarded"
+        elif not result.passed and len(result.failures) >= 2:
             new_target = "discarded"
         elif is_placeholder_rule(
             requirement=rule.requirement,
@@ -786,6 +837,9 @@ def _apply_fidelity_gate(candidates: list[RuleCandidate]) -> list[RuleCandidate]
                 fidelity_pass=result.passed,
                 fidelity_failures=result.failures,
                 voice_match=(len(voice_failures) == 0),
+                semantic_pass=sem_result.passed,
+                semantic_failures=sem_result.failures,
+                semantic_deviation=sem_result.deviation,
                 output_target=new_target,
             )
         )
@@ -939,6 +993,10 @@ def _metadata_payload(rule: RuleCandidate) -> dict:
         "exception_conditions": rule.exception_conditions,
         "review_action": rule.review_action,
         "transformation_note": rule.transformation_note,
+        "source_role": rule.source_role,
+        "generalizable": rule.generalizable,
+        "instance_facts": rule.instance_facts,
+        "applicable_scope": rule.applicable_scope,
     }
 
 
@@ -1001,9 +1059,16 @@ async def run_batch(
         candidates = await _run_pipelines(docs, router, cfg, progress, scope)
         candidates = _apply_task_scope(candidates, scope)
 
+        # 合同抽取优化：来源角色分流+适用范围标注 → 实例事实检测 → 历史合同规则通用化
+        candidates = annotate_source_roles(candidates)
+        candidates = annotate_generalizable(candidates)
+        candidates = await genericize_instances(candidates, router, cfg)
+
         progress.current_step = "finalizing"
+        raw_extracted = len(candidates)
         rules = _finalize(candidates, cfg)
         progress.total_rules = len(rules)
+        progress.disposition = _build_disposition(raw_extracted, rules)
         _update_fidelity_stats(progress, rules)
 
         progress.current_step = "merging"
@@ -1069,6 +1134,7 @@ def _build_summary(
         "conflicts": conflicts,
         "merge_actions": actions,
         "errors": list(progress.errors),
+        "disposition": dict(progress.disposition),
         "extraction_completeness": _build_extraction_completeness(rules, progress),
     }
 
@@ -1092,7 +1158,13 @@ def _build_extraction_completeness(
 def _under_extracted_files(
     rules_per_file: dict[str, int], progress: BatchProgress
 ) -> list[dict]:
-    """v1.2：规则密度低于颗粒度档位下限的文件，标记复查。"""
+    """v1.2：规则密度低于颗粒度档位下限的文件，标记复查。
+
+    v2.0：新增 ``needs_re_extraction`` 标志——密度不足的文件标记为需要重抽。
+    完整重抽逻辑（temperature=0.4 + prompt 追加覆盖率强调 + fingerprint 去重合并）
+    需要在 run_batch 中保留 docs/router 到 summary 阶段，后续迭代实现。
+    当前先标记，让用户在报告中看到哪些文件需要复查。
+    """
     from .pipelines.p1_body import GRANULARITY_DENSITY
 
     low_bound, _ = GRANULARITY_DENSITY.get(progress.granularity_level, (2.0, 4.0))
@@ -1111,6 +1183,8 @@ def _under_extracted_files(
                 "rules": rules_count,
                 "density_per_1000_chars": round(density, 2),
                 "expected_min": low_bound,
+                # v2.0: 标记需要重抽——后续迭代在 run_batch 中触发一次 P1 重抽
+                "needs_re_extraction": True,
             })
     return out
 
@@ -1238,6 +1312,10 @@ def candidate_to_api_dict(rule: RuleCandidate) -> dict:
         "exception_conditions": rule.exception_conditions,
         "review_action": rule.review_action,
         "transformation_note": rule.transformation_note,
+        "source_role": rule.source_role,
+        "generalizable": rule.generalizable,
+        "instance_facts": rule.instance_facts,
+        "applicable_scope": rule.applicable_scope,
     }
 
 

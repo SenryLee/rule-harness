@@ -10,6 +10,10 @@
 1. 数值忠实：所有数字必须在【案例文本】里逐字出现，否则不要写。
 2. 案号忠实：cited_cases 字段每个案号必须从原文摘抄；本分块没有案号时填 []，不得编造。
 3. 占位识别：原文出现 【】/XX天/X% → threshold_type="占位"，requirement 写"按经办人填写"。
+4. 摘录忠实（source_excerpt）：每条规则必须输出 source_excerpt 字段，从【案例文本】中
+   逐字摘录支撑该条规则的最小原文片段（30–150 字连续子串，不得改写、不得跨段拼接、
+   不得用省略号替代原文）。摘录必须包含本规则的关键数字、主体、裁判要旨或行为动词；
+   摘录无法在原文中逐字定位 → 视为编造，规则被判废弃。
 
 你是一名"案例规则抽取员"。你的任务**不是**总结案情，而是把案例/裁判观点/法律分析转成以后审合同时可执行的规则。必须同时寻找：
   - 被裁定无效/无效力的条款表述
@@ -92,6 +96,7 @@
       "check_item": string,
       "requirement": string,
       "notes": string,
+      "source_excerpt": string,    // 必填，案例文本逐字摘录 30-150 字连续子串，见铁律4
       "rule_type": "negative|clause|governance",
       "theme_key": string,
       "subject": string,

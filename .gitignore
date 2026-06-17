@@ -43,3 +43,10 @@ data/
 .wrangler/
 .playwright-mcp/
 deploy_status.log
+server_snapshot.log
+
+# WorkBuddy project memory (local-only, not for repo)
+.workbuddy/
+
+# FUSE mount residue (garbage files, never commit)
+.fuse_hidden*

@@ -20,6 +20,8 @@ extraction:
   granularity_level: 4
   regulation_depth: full
   consistency_sampling: false
+  # v2.0: 即使 consistency_sampling=false，也仅对 risk_level=高 的规则做一致性校验
+  consistency_sampling_high_risk_only: true
   industry_preset: null
   industry_vocabulary: ""
   industry_focus_points: ""
@@ -60,14 +62,15 @@ priorities:
 
 confidence:
   threshold_review: 0.7
-  # v1.1：五重门加权（合计 1.00）。fidelity 是新引入的"数值忠实度"，权重最高，
-  # 用于灭掉数值幻觉。
+  # v2.0：六重门加权（合计 1.00）。fidelity 灭数值幻觉，semantic 灭语义幻觉
+  # （法律术语/主体名词回溯）。fidelity 权重从 0.30 调为 0.25，腾出 0.15 给 semantic。
   weights:
-    self: 0.25
+    self: 0.15
     consistency: 0.25
     struct: 0.15
     conflict: 0.05
-    fidelity: 0.30
+    fidelity: 0.25
+    semantic: 0.15
 
 concurrency:
   files: 4

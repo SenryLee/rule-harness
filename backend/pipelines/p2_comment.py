@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, validate_atomic
+from ..harness import THEME_KEYS, take_excerpt, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import CommentBlock, ParsedDocument, RuleCandidate
 from .errors import record_llm_failure
@@ -71,6 +71,8 @@ class P2CommentPipeline:
             # 批注优先级提升：默认为"公司红线/内部制度"层（priority 2-3），取较高者
             promoted_priority = min(doc.priority, 2)
 
+            _take_excerpt_value, _take_excerpt_fallback = take_excerpt(rule, comment.text)
+
             out.append(RuleCandidate(
                 risk_level=str(rule.get("risk_level", "高")),
                 keywords=tuple(kws),
@@ -83,7 +85,7 @@ class P2CommentPipeline:
                 predicate=str(rule.get("predicate", "")),
                 threshold_type=str(rule.get("threshold_type", "无")),
                 direction=str(rule.get("direction", "正向")),
-                source_excerpt=comment.text,
+                source_excerpt=_take_excerpt_value,
                 source_location=f"comment-{comment.comment_id}@{comment.anchor_location}",
                 pipeline=self.pipeline_id,
                 self_confidence=float(rule.get("self_confidence", 0.5)),
@@ -96,6 +98,8 @@ class P2CommentPipeline:
                 model=self.router.primary.name if self.router.primary else "",
                 struct_check_pass=(len(failures) == 0),
                 struct_failures=tuple(failures),
+                excerpt_fallback=_take_excerpt_fallback,
+                raw_block_text=comment.text,
             ))
         return out
 

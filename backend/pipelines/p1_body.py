@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, map_theme_key, validate_atomic
+from ..harness import THEME_KEYS, map_theme_key, take_excerpt, validate_atomic
 from ..llm import LLMRouter, LLMTruncatedError
 from ..parsers import ContentBlock, ParsedDocument, RuleCandidate
 from .errors import record_llm_failure
@@ -120,10 +120,15 @@ class P1BodyPipeline:
                 user=user_prompt,
                 temperature=0.2,
             )
-        except LLMTruncatedError:
+        except LLMTruncatedError as exc:
             # 输出被 max_tokens 截断：递归二分重切，直到每片输出能放下或块小到无法再切。
             if split_depth < _MAX_SPLIT_DEPTH and len(block.text) > _MIN_SPLIT_CHARS:
                 return await self._extract_split_block(doc, block, ctx, split_depth + 1)
+            # 已到不可再切的最小块仍被截断（密集法条 / 模型输出啰嗦）：
+            # 与其整块丢弃，不如从被截断的 JSON 里捞回已经写全的规则对象。
+            salvaged = _salvage_truncated_rules(getattr(exc, "partial_content", "") or "")
+            if salvaged:
+                return [self._build_candidate(doc, block, rule) for rule in salvaged]
             record_llm_failure(
                 ctx, self.pipeline_id, doc.filename, block.block_id,
                 LLMTruncatedError("truncated and block too small to split"),
@@ -263,6 +268,8 @@ class P1BodyPipeline:
         if theme_unmapped and raw_theme:
             uncertainty = list(uncertainty) + [f"theme_key未映射:{raw_theme}"]
 
+        _take_excerpt_value, _take_excerpt_fallback = take_excerpt(rule, block.text)
+
         return RuleCandidate(
             risk_level=str(rule.get("risk_level", "中")),
             keywords=tuple(kws),
@@ -275,7 +282,7 @@ class P1BodyPipeline:
             predicate=str(rule.get("predicate", "")),
             threshold_type=str(rule.get("threshold_type", "无")),
             direction=str(rule.get("direction", "正向")),
-            source_excerpt=block.text,
+            source_excerpt=_take_excerpt_value,
             source_location=block.location,
             pipeline=self.pipeline_id,
             self_confidence=float(rule.get("self_confidence", 0.5)),
@@ -294,6 +301,8 @@ class P1BodyPipeline:
             exception_conditions=_string_field(rule, "exception_conditions"),
             review_action=_string_field(rule, "review_action"),
             transformation_note=_string_field(rule, "transformation_note"),
+            excerpt_fallback=_take_excerpt_fallback,
+            raw_block_text=block.text,
         )
 
     def _record_skipped(
@@ -348,6 +357,53 @@ class P1BodyPipeline:
                 "scope_description": str(ctx.get("scope_description", "")) or "无",
             },
         )
+
+
+def _salvage_truncated_rules(partial_content: str) -> list[dict]:
+    """从被 max_tokens 截断的 JSON 输出里捞回已经写全的规则对象。
+
+    截断的内容形如 ``{"rules": [ {完整}, {完整}, {不完整……`` —— 最后一个对象残缺、
+    整体 JSON 无法直接解析。这里定位 ``rules`` 数组起点，用 ``raw_decode`` 逐个解码
+    其中的完整对象，遇到第一个残缺对象即停止，返回此前所有完整规则。零规则时返回空表。
+    """
+    import json as _json
+
+    if not partial_content:
+        return []
+    # 先尝试整体解析（有时截断恰好落在数组闭合后、只是缺尾部字段）
+    try:
+        obj = _json.loads(partial_content)
+        rules = obj.get("rules")
+        if isinstance(rules, list):
+            return [r for r in rules if isinstance(r, dict)]
+    except (ValueError, AttributeError):
+        pass
+
+    key_idx = partial_content.find('"rules"')
+    if key_idx == -1:
+        return []
+    bracket_idx = partial_content.find("[", key_idx)
+    if bracket_idx == -1:
+        return []
+
+    decoder = _json.JSONDecoder()
+    idx = bracket_idx + 1
+    salvaged: list[dict] = []
+    length = len(partial_content)
+    while idx < length:
+        # 跳过对象之间的空白与逗号
+        while idx < length and partial_content[idx] in " \t\r\n,":
+            idx += 1
+        if idx >= length or partial_content[idx] == "]":
+            break
+        try:
+            value, end = decoder.raw_decode(partial_content, idx)
+        except ValueError:
+            break  # 残缺对象：停在此处
+        if isinstance(value, dict):
+            salvaged.append(value)
+        idx = end
+    return salvaged
 
 
 def _missing_skeleton(rule: dict) -> bool:

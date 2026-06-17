@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from ..config import Config
-from ..harness import THEME_KEYS, validate_atomic
+from ..harness import THEME_KEYS, take_excerpt, validate_atomic
 from ..llm import LLMRouter
 from ..parsers import ParsedDocument, RuleCandidate
 from .errors import record_llm_failure
@@ -90,6 +90,8 @@ class P4RedlinePipeline:
                 "unacceptable": str(rule.get("ladder_unacceptable", "")),
             }
 
+            _take_excerpt_value, _take_excerpt_fallback = take_excerpt(rule, block.text)
+
             out.append(RuleCandidate(
                 risk_level=str(rule.get("risk_level", "高")),
                 keywords=tuple(kws),
@@ -102,7 +104,7 @@ class P4RedlinePipeline:
                 predicate=str(rule.get("predicate", "")),
                 threshold_type=str(rule.get("threshold_type", "无")),
                 direction=str(rule.get("direction", "反向")),
-                source_excerpt=block.text,
+                source_excerpt=_take_excerpt_value,
                 source_location=block.location,
                 pipeline=self.pipeline_id,
                 self_confidence=float(rule.get("self_confidence", 0.5)),
@@ -117,6 +119,8 @@ class P4RedlinePipeline:
                 struct_failures=tuple(failures),
                 ladder=ladder,
                 output_target="negotiation",  # v1.1: P4 阶梯规则不进主 CSV
+                excerpt_fallback=_take_excerpt_fallback,
+                raw_block_text=block.text,
             ))
         return out
 

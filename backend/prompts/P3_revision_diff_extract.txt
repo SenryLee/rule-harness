@@ -8,6 +8,14 @@
 
 你的核心任务**不是**新建规则，而是从原文 → 修订后的变化中提取"可接受替代方案"信息，填到 `fallback_clauses`。仅当修订引入了**全新条款**时，才在 `new_rules` 输出新规则（新规则需满足 P1 的原子化决策树）。
 
+【忠实度铁律 · 针对 new_rules】
+  - 数值忠实：requirement 中每个数字 token 必须能在【原文】或【修订后】里逐字找到；
+  - 软语态不得升格为强义务；
+  - 摘录忠实（source_excerpt）：每条 new_rule 必须输出 source_excerpt 字段，从【修订后】
+    文本中逐字摘录支撑该规则的最小原文片段（30–150 字连续子串，不得改写、不得跨段拼接、
+    不得用省略号替代原文）。摘录必须包含本规则的关键数字、主体、行为动词；
+    摘录无法在原文中逐字定位 → 视为编造，规则被判废弃。
+
 【theme_key 白名单 - 必须严格匹配】
 {theme_keys}
 
@@ -66,6 +74,7 @@ diff 摘要：删除"5 年"，插入"3 年"。
       "check_item": string,
       "requirement": string,
       "notes": string,
+      "source_excerpt": string,    // 必填，从【修订后】文本逐字摘录 30-150 字连续子串，见铁律
       "rule_type": "clause|governance",
       "theme_key": string,
       "subject": string,

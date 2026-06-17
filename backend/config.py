@@ -9,7 +9,11 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.default.yaml"
-USER_CONFIG_DIR = PROJECT_ROOT / "data"
+# 所有运行期数据（SQLite/上传/导出/归档）的根目录。默认 PROJECT_ROOT/data；
+# 部署时把宿主机持久卷挂到容器内的该路径（默认 /app/data），重建容器数据就不再清零。
+# 可用环境变量 DATA_DIR 覆盖（指向挂载点）。
+DATA_DIR = Path(os.environ.get("DATA_DIR") or (PROJECT_ROOT / "data"))
+USER_CONFIG_DIR = DATA_DIR
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 
 
@@ -41,12 +45,18 @@ class ExtractionConfig:
     # v1.2：颗粒度档位 1(粗)–5(极细)。旧 granularity 字符串保留兼容：
     # fine→4，balanced→3。档位同时驱动切块大小/拆分策略/跳过门槛/去重/密度提示。
     granularity_level: int = 3
+    # v2.0: 即使 consistency_sampling=false，也仅对 risk_level=高 的规则做双采样
+    consistency_sampling_high_risk_only: bool = True
     # v1.4 细化旋钮：None = 跟随档位联动；设置后单项覆盖
     chunk_chars: Optional[int] = None          # 目标切块字符数 600–4000
     density_min: Optional[float] = None        # 每千字最少规则数
     density_max: Optional[float] = None        # 每千字最多规则数（法规不设上限）
     skip_strictness: Optional[str] = None      # lenient(宽松跳过) | strict(几乎不跳)
     dedupe_level: Optional[int] = None         # 去重粒度 1(激进合并)–5(保守保留)
+    # 合同抽取优化开关（默认开启，可单项关闭回退旧行为）
+    template_first: bool = True                # 范本主导+历史降权（去重/合并主条排序）
+    contract_semantic_dedupe: bool = True      # 合同来源按口径级语义去重（忽略 check_item 字面）
+    genericize_instances: bool = True          # 对历史合同实例规则做 LLM 通用化重写
 
 
 @dataclass(frozen=True)
@@ -69,7 +79,8 @@ class ConfidenceWeights:
     consistency: float
     struct: float
     conflict: float
-    fidelity: float = 0.30  # v1.1: 第五重门权重；默认 0.30
+    fidelity: float = 0.25  # v1.1: 第五重门权重；v2.0 调整为 0.25
+    semantic: float = 0.15  # v2.0: 语义忠实度门权重
 
 
 @dataclass(frozen=True)
@@ -152,6 +163,7 @@ def _parse_extraction(raw: dict) -> ExtractionConfig:
         granularity="fine" if level >= 4 else "balanced",
         regulation_depth=raw["regulation_depth"],
         consistency_sampling=raw["consistency_sampling"],
+        consistency_sampling_high_risk_only=raw.get("consistency_sampling_high_risk_only", True),
         industry_preset=raw.get("industry_preset"),
         industry_vocabulary=raw.get("industry_vocabulary", ""),
         industry_focus_points=raw.get("industry_focus_points", ""),
@@ -163,6 +175,9 @@ def _parse_extraction(raw: dict) -> ExtractionConfig:
         skip_strictness=(raw.get("skip_strictness")
                          if raw.get("skip_strictness") in ("lenient", "strict") else None),
         dedupe_level=_opt_int(raw.get("dedupe_level"), 1, 5),
+        template_first=_opt_bool(raw.get("template_first"), True),
+        contract_semantic_dedupe=_opt_bool(raw.get("contract_semantic_dedupe"), True),
+        genericize_instances=_opt_bool(raw.get("genericize_instances"), True),
     )
 
 
@@ -184,6 +199,16 @@ def _opt_float(value, lo: float, hi: float) -> Optional[float]:
         return None
 
 
+def _opt_bool(value, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "是")
+    return bool(value)
+
+
 def _parse_priorities(raw: dict) -> PriorityConfig:
     return PriorityConfig(
         weights=PriorityWeights(**raw["weights"]),
@@ -199,7 +224,8 @@ def _parse_confidence(raw: dict) -> ConfidenceConfig:
             consistency=float(weights_raw.get("consistency", 0.25)),
             struct=float(weights_raw.get("struct", 0.15)),
             conflict=float(weights_raw.get("conflict", 0.05)),
-            fidelity=float(weights_raw.get("fidelity", 0.30)),
+            fidelity=float(weights_raw.get("fidelity", 0.25)),
+            semantic=float(weights_raw.get("semantic", 0.15)),
         ),
     )
 
@@ -272,6 +298,7 @@ def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
         "granularity_level": extraction.granularity_level,
         "regulation_depth": extraction.regulation_depth,
         "consistency_sampling": extraction.consistency_sampling,
+        "consistency_sampling_high_risk_only": extraction.consistency_sampling_high_risk_only,
         "industry_preset": extraction.industry_preset,
         "industry_vocabulary": extraction.industry_vocabulary,
         "industry_focus_points": extraction.industry_focus_points,
@@ -281,6 +308,9 @@ def _extraction_to_dict(extraction: ExtractionConfig) -> dict:
         "density_max": extraction.density_max,
         "skip_strictness": extraction.skip_strictness,
         "dedupe_level": extraction.dedupe_level,
+        "template_first": extraction.template_first,
+        "contract_semantic_dedupe": extraction.contract_semantic_dedupe,
+        "genericize_instances": extraction.genericize_instances,
     }
 
 
@@ -308,6 +338,7 @@ def config_to_dict(cfg: Config) -> dict:
                 "struct": cfg.confidence.weights.struct,
                 "conflict": cfg.confidence.weights.conflict,
                 "fidelity": cfg.confidence.weights.fidelity,
+                "semantic": cfg.confidence.weights.semantic,
             },
         },
         "concurrency": {

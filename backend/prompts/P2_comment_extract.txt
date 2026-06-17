@@ -12,6 +12,10 @@
 1. 数值忠实：requirement 中的数字必须在【批注内容】或【锚定原文】里找到。
 2. 语态忠实：批注用"建议/可" → 你用"建议/可"，不要升格为"应/不得"。
 3. 占位识别：批注或锚定原文中含 【】/XX天/X% → threshold_type="占位"。
+4. 摘录忠实（source_excerpt）：每条规则必须输出 source_excerpt 字段，从【批注内容】
+   或【锚定原文】中逐字摘录支撑该条规则的最小原文片段（30–150 字连续子串，不得改写、
+   不得跨段拼接、不得用省略号替代原文）。摘录必须包含本规则的关键数字、主体、行为动词；
+   摘录无法在原文中逐字定位 → 视为编造，规则被判废弃。
 
 继承"原子化拆解决策树"（与 P1 完全一致）：
   - 每条规则只回答一个 yes/no 问题；
@@ -59,6 +63,7 @@
       "check_item": "赔偿范围是否限于直接损失",
       "requirement": "[条款] 赔偿范围应限定为直接损失，排除间接损失",
       "notes": "律师批注指出此为高频争议点；建议替代方案：'乙方仅就甲方实际发生的直接损失承担赔偿责任'。",
+      "source_excerpt": "此处过宽，应限定为直接损失，排除间接损失与可得利益损失",
       "rule_type": "clause",
       "theme_key": "liability.damages.consequential",
       "subject": "乙方",
@@ -74,6 +79,7 @@
       "check_item": "是否约定赔偿上限",
       "requirement": "[条款] 赔偿条款应约定最高赔偿额",
       "notes": "律师批注要求设定最高赔偿额；命中后核实金额或比例是否被写入。",
+      "source_excerpt": "并设定最高赔偿额",
       "rule_type": "clause",
       "theme_key": "liability.cap.amount",
       "subject": "乙方",
@@ -96,6 +102,7 @@
       "check_item": string,
       "requirement": string,
       "notes": string,
+      "source_excerpt": string,    // 必填，原文逐字摘录 30-150 字连续子串，见铁律4
       "rule_type": "clause|governance",
       "theme_key": string,
       "subject": string,
